@@ -456,7 +456,7 @@ func (a *headAppender) Commit() (err error) {
 	for i, s := range a.samples {
 		series = a.sampleSeries[i]
 		series.Lock()
-		ok, chunkCreated := series.append(s.T, s.V, a.appendID, a.head.chunkDiskMapper)
+		ok, chunkCreated, numSamples := series.append(s.T, s.V, a.appendID, a.head.chunkDiskMapper)
 		series.cleanupAppendIDsBelow(a.cleanupAppendIDsBelow)
 		series.pendingCommit = false
 		series.Unlock()
@@ -468,6 +468,7 @@ func (a *headAppender) Commit() (err error) {
 		if chunkCreated {
 			a.head.metrics.chunks.Inc()
 			a.head.metrics.chunksCreated.Inc()
+			a.head.metrics.chunkUsageAtCut.Observe(float64(numSamples))
 		}
 	}
 
@@ -481,7 +482,7 @@ func (a *headAppender) Commit() (err error) {
 // the appendID for isolation. (The appendID can be zero, which results in no
 // isolation for this append.)
 // It is unsafe to call this concurrently with s.iterator(...) without holding the series lock.
-func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper *chunks.ChunkDiskMapper) (sampleInOrder, chunkCreated bool) {
+func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper *chunks.ChunkDiskMapper) (sampleInOrder, chunkCreated bool, pos int) {
 	// Based on Gorilla white papers this offers near-optimal compression ratio
 	// so anything bigger that this has diminishing returns and increases
 	// the time range within which we have to decompress all samples.
@@ -492,7 +493,7 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 	if c == nil {
 		if len(s.mmappedChunks) > 0 && s.mmappedChunks[len(s.mmappedChunks)-1].maxTime >= t {
 			// Out of order sample. Sample timestamp is already in the mmapped chunks, so ignore it.
-			return false, false
+			return false, false, 0
 		}
 		// There is no chunk in this series yet, create the first chunk for the sample.
 		c = s.cutNewHeadChunk(t, chunkDiskMapper)
@@ -501,7 +502,7 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 
 	// Out of order sample.
 	if c.maxTime >= t {
-		return false, chunkCreated
+		return false, chunkCreated, 0
 	}
 
 	numSamples := c.chunk.NumSamples()
@@ -536,7 +537,7 @@ func (s *memSeries) append(t int64, v float64, appendID uint64, chunkDiskMapper 
 		s.txs.add(appendID)
 	}
 
-	return true, chunkCreated
+	return true, chunkCreated, numSamples
 }
 
 // computeChunkEndTime estimates the end timestamp based the beginning of a

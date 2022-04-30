@@ -281,6 +281,7 @@ type headMetrics struct {
 	checkpointCreationTotal  prometheus.Counter
 	mmapChunkCorruptionTotal prometheus.Counter
 	snapshotReplayErrorTotal prometheus.Counter // Will be either 0 or 1.
+	chunkUsageAtCut          prometheus.Histogram
 }
 
 func newHeadMetrics(h *Head, r prometheus.Registerer) *headMetrics {
@@ -379,6 +380,11 @@ func newHeadMetrics(h *Head, r prometheus.Registerer) *headMetrics {
 			Name: "prometheus_tsdb_snapshot_replay_error_total",
 			Help: "Total number snapshot replays that failed.",
 		}),
+		chunkUsageAtCut: prometheus.NewHistogram(prometheus.HistogramOpts{
+			Name:    "prometheus_tsdb_chunk_cut_samples",
+			Help:    "Number of samples in a chunk when a new chunk is cut",
+			Buckets: []float64{0, 1, 2, 5, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 150, 180, 240, 320, 500},
+		}),
 	}
 
 	if r != nil {
@@ -432,6 +438,7 @@ func newHeadMetrics(h *Head, r prometheus.Registerer) *headMetrics {
 			}, func() float64 {
 				return float64(h.iso.lastAppendID())
 			}),
+			m.chunkUsageAtCut,
 		)
 	}
 	return m
