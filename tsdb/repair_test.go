@@ -80,11 +80,12 @@ func TestRepairBadIndexVersion(t *testing.T) {
 	require.NoError(t, err)
 	p, err := r.Postings("b", "1")
 	require.NoError(t, err)
+	var builder labels.SimpleBuilder
 	for p.Next() {
 		t.Logf("next ID %d", p.At())
 
 		var lset labels.Labels
-		require.Error(t, r.Series(p.At(), &lset, nil))
+		require.Error(t, r.Series(p.At(), &builder, &lset, nil))
 	}
 	require.NoError(t, p.Err())
 	require.NoError(t, r.Close())
@@ -106,14 +107,14 @@ func TestRepairBadIndexVersion(t *testing.T) {
 
 		var lset labels.Labels
 		var chks []chunks.Meta
-		require.NoError(t, r.Series(p.At(), &lset, &chks))
+		require.NoError(t, r.Series(p.At(), &builder, &lset, &chks))
 		res = append(res, lset)
 	}
 
 	require.NoError(t, p.Err())
 	require.Equal(t, []labels.Labels{
-		{{Name: "a", Value: "1"}, {Name: "b", Value: "1"}},
-		{{Name: "a", Value: "2"}, {Name: "b", Value: "1"}},
+		labels.FromStrings("a", "1", "b", "1"),
+		labels.FromStrings("a", "2", "b", "1"),
 	}, res)
 
 	meta, _, err := readMetaFile(tmpDbDir)
