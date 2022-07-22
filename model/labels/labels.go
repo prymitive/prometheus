@@ -67,7 +67,25 @@ func decodeSize(data string, index int) (int, int) {
 	return size, index
 }
 
-func decodeString(data string, index int) (string, int) {
+func decodeName(data string, index int) (string, int) {
+	var size int
+	size, index = decodeSize(data, index)
+	v := data[index : index+size]
+	switch v {
+	case string(metricNameRune):
+		return MetricName, index + size
+	case string(jobRune):
+		return "job", index + size
+	case string(instanceRune):
+		return InstanceName, index + size
+	case string(alertnameRune):
+		return "alertname", index + size
+	default:
+		return v, index + size
+	}
+}
+
+func decodeValue(data string, index int) (string, int) {
 	var size int
 	size, index = decodeSize(data, index)
 	return data[index : index+size], index + size
@@ -83,8 +101,8 @@ func (ls Labels) String() string {
 			b.WriteByte(' ')
 		}
 		var name, value string
-		name, i = decodeString(ls.data, i)
-		value, i = decodeString(ls.data, i)
+		name, i = decodeName(ls.data, i)
+		value, i = decodeValue(ls.data, i)
 		b.WriteString(name)
 		b.WriteByte('=')
 		b.WriteString(strconv.Quote(value))
@@ -170,8 +188,8 @@ func (ls Labels) HashForLabels(b []byte, names ...string) (uint64, []byte) {
 	j := 0
 	for i := 0; i < len(ls.data); {
 		var name, value string
-		name, i = decodeString(ls.data, i)
-		value, i = decodeString(ls.data, i)
+		name, i = decodeName(ls.data, i)
+		value, i = decodeValue(ls.data, i)
 		for j < len(names) && names[j] < name {
 			j++
 		}
@@ -197,8 +215,8 @@ func (ls Labels) HashWithoutLabels(b []byte, names ...string) (uint64, []byte) {
 	j := 0
 	for i := 0; i < len(ls.data); {
 		var name, value string
-		name, i = decodeString(ls.data, i)
-		value, i = decodeString(ls.data, i)
+		name, i = decodeName(ls.data, i)
+		value, i = decodeValue(ls.data, i)
 		for j < len(names) && names[j] < name {
 			j++
 		}
@@ -219,8 +237,8 @@ func (ls Labels) BytesWithLabels(buf []byte, names ...string) []byte {
 	b := buf[:0]
 	j := 0
 	for pos := 0; pos < len(ls.data); {
-		lName, newPos := decodeString(ls.data, pos)
-		_, newPos = decodeString(ls.data, newPos)
+		lName, newPos := decodeName(ls.data, pos)
+		_, newPos = decodeValue(ls.data, newPos)
 		for j < len(names) && names[j] < lName {
 			j++
 		}
@@ -241,8 +259,8 @@ func (ls Labels) BytesWithoutLabels(buf []byte, names ...string) []byte {
 	b := buf[:0]
 	j := 0
 	for pos := 0; pos < len(ls.data); {
-		lName, newPos := decodeString(ls.data, pos)
-		_, newPos = decodeString(ls.data, newPos)
+		lName, newPos := decodeName(ls.data, pos)
+		_, newPos = decodeValue(ls.data, newPos)
 		for j < len(names) && names[j] < lName {
 			j++
 		}
@@ -265,8 +283,8 @@ func (ls Labels) Copy() Labels {
 func (ls Labels) Get(name string) string {
 	for i := 0; i < len(ls.data); {
 		var lName, lValue string
-		lName, i = decodeString(ls.data, i)
-		lValue, i = decodeString(ls.data, i)
+		lName, i = decodeName(ls.data, i)
+		lValue, i = decodeValue(ls.data, i)
 		if lName == name {
 			return lValue
 		}
@@ -278,8 +296,8 @@ func (ls Labels) Get(name string) string {
 func (ls Labels) Has(name string) bool {
 	for i := 0; i < len(ls.data); {
 		var lName string
-		lName, i = decodeString(ls.data, i)
-		_, i = decodeString(ls.data, i)
+		lName, i = decodeName(ls.data, i)
+		_, i = decodeValue(ls.data, i)
 		if lName == name {
 			return true
 		}
@@ -292,8 +310,8 @@ func (ls Labels) Has(name string) bool {
 func (ls Labels) HasDuplicateLabelNames() (string, bool) {
 	var lName, prevName string
 	for i := 0; i < len(ls.data); {
-		lName, i = decodeString(ls.data, i)
-		_, i = decodeString(ls.data, i)
+		lName, i = decodeName(ls.data, i)
+		_, i = decodeValue(ls.data, i)
 		if lName == prevName {
 			return lName, true
 		}
@@ -306,8 +324,8 @@ func (ls Labels) HasDuplicateLabelNames() (string, bool) {
 // May return the same labelset.
 func (ls Labels) WithoutEmpty() Labels {
 	for pos := 0; pos < len(ls.data); {
-		_, newPos := decodeString(ls.data, pos)
-		lValue, newPos := decodeString(ls.data, newPos)
+		_, newPos := decodeName(ls.data, pos)
+		lValue, newPos := decodeValue(ls.data, newPos)
 		if lValue != "" {
 			pos = newPos
 			continue
@@ -320,8 +338,8 @@ func (ls Labels) WithoutEmpty() Labels {
 		pos = newPos             // move past the first blank value
 		for pos < len(ls.data) {
 			var newPos int
-			_, newPos = decodeString(ls.data, pos)
-			lValue, newPos = decodeString(ls.data, newPos)
+			_, newPos = decodeName(ls.data, pos)
+			lValue, newPos = decodeValue(ls.data, newPos)
 			if lValue != "" {
 				buf = append(buf, ls.data[pos:newPos]...)
 			}
@@ -342,8 +360,8 @@ func (ls Labels) Map() map[string]string {
 	m := make(map[string]string, len(ls.data)/10)
 	for i := 0; i < len(ls.data); {
 		var lName, lValue string
-		lName, i = decodeString(ls.data, i)
-		lValue, i = decodeString(ls.data, i)
+		lName, i = decodeName(ls.data, i)
+		lValue, i = decodeValue(ls.data, i)
 		m[lName] = lValue
 	}
 	return m
@@ -405,8 +423,8 @@ func Compare(a, b Labels) int {
 	ia, ib := 0, 0
 	for ia < l {
 		var aName, bName string
-		aName, ia = decodeString(a.data, ia)
-		bName, ib = decodeString(b.data, ib)
+		aName, ia = decodeName(a.data, ia)
+		bName, ib = decodeName(b.data, ib)
 		if aName != bName {
 			if aName < bName {
 				return -1
@@ -414,8 +432,8 @@ func Compare(a, b Labels) int {
 			return 1
 		}
 		var aValue, bValue string
-		aValue, ia = decodeString(a.data, ia)
-		bValue, ib = decodeString(b.data, ib)
+		aValue, ia = decodeValue(a.data, ia)
+		bValue, ib = decodeValue(b.data, ib)
 		if aValue != bValue {
 			if aValue < bValue {
 				return -1
@@ -459,8 +477,8 @@ func (ls Labels) Len() int {
 func (ls Labels) Range(f func(l Label)) {
 	for i := 0; i < len(ls.data); {
 		var lName, lValue string
-		lName, i = decodeString(ls.data, i)
-		lValue, i = decodeString(ls.data, i)
+		lName, i = decodeName(ls.data, i)
+		lValue, i = decodeValue(ls.data, i)
 		f(Label{Name: lName, Value: lValue})
 	}
 }
@@ -469,8 +487,8 @@ func (ls Labels) Range(f func(l Label)) {
 func (ls Labels) RangeToError(f func(l Label) error) error {
 	for i := 0; i < len(ls.data); {
 		var lName, lValue string
-		lName, i = decodeString(ls.data, i)
-		lValue, i = decodeString(ls.data, i)
+		lName, i = decodeName(ls.data, i)
+		lValue, i = decodeValue(ls.data, i)
 		err := f(Label{Name: lName, Value: lValue})
 		if err != nil {
 			return err
@@ -497,8 +515,8 @@ func (ls Labels) Filter(f func(l Label) bool) Labels {
 	for pos := 0; pos < len(ls.data); {
 		oldPos := pos
 		var lName, lValue string
-		lName, pos = decodeString(ls.data, pos)
-		lValue, pos = decodeString(ls.data, pos)
+		lName, pos = decodeName(ls.data, pos)
+		lValue, pos = decodeValue(ls.data, pos)
 		ok := f(Label{Name: lName, Value: lValue})
 		if ok {
 			buf = append(buf, ls.data[oldPos:pos]...)
@@ -519,11 +537,11 @@ func (ls Labels) Merge(externalLabels Labels) Labels {
 	buf := make([]byte, 0, len(ls.data)+len(externalLabels.data))
 
 	ePos, ePrev := 0, 0
-	eName, ePos := decodeString(externalLabels.data, ePos)
-	_, ePos = decodeString(externalLabels.data, ePos)
+	eName, ePos := decodeName(externalLabels.data, ePos)
+	_, ePos = decodeValue(externalLabels.data, ePos)
 	pos, prev := 0, 0
-	lName, pos := decodeString(ls.data, pos)
-	_, pos = decodeString(ls.data, pos)
+	lName, pos := decodeName(ls.data, pos)
+	_, pos = decodeValue(ls.data, pos)
 
 	for {
 		if lName < eName {
@@ -532,16 +550,16 @@ func (ls Labels) Merge(externalLabels Labels) Labels {
 			if pos >= len(ls.data) {
 				break
 			}
-			lName, pos = decodeString(ls.data, pos)
-			_, pos = decodeString(ls.data, pos)
+			lName, pos = decodeName(ls.data, pos)
+			_, pos = decodeValue(ls.data, pos)
 		} else if lName > eName {
 			buf = append(buf, externalLabels.data[ePrev:ePos]...)
 			ePrev = ePos
 			if ePos >= len(externalLabels.data) {
 				break
 			}
-			eName, ePos = decodeString(externalLabels.data, ePos)
-			_, ePos = decodeString(externalLabels.data, ePos)
+			eName, ePos = decodeName(externalLabels.data, ePos)
+			_, ePos = decodeValue(externalLabels.data, ePos)
 		} else {
 			buf = append(buf, ls.data[prev:pos]...)
 			prev = pos
@@ -549,13 +567,13 @@ func (ls Labels) Merge(externalLabels Labels) Labels {
 			if pos >= len(ls.data) {
 				break
 			}
-			lName, pos = decodeString(ls.data, pos)
-			_, pos = decodeString(ls.data, pos)
+			lName, pos = decodeName(ls.data, pos)
+			_, pos = decodeValue(ls.data, pos)
 			if ePos >= len(externalLabels.data) {
 				break
 			}
-			eName, ePos = decodeString(externalLabels.data, ePos)
-			_, ePos = decodeString(externalLabels.data, ePos)
+			eName, ePos = decodeName(externalLabels.data, ePos)
+			_, ePos = decodeValue(externalLabels.data, ePos)
 		}
 	}
 	buf = append(append(buf, ls.data[prev:]...), externalLabels.data[ePrev:]...)
@@ -586,8 +604,8 @@ func (b *Builder) Reset(base Labels) {
 	b.add = b.add[:0]
 	for i := 0; i < len(base.data); {
 		var lName, lValue string
-		lName, i = decodeString(base.data, i)
-		lValue, i = decodeString(base.data, i)
+		lName, i = decodeName(base.data, i)
+		lValue, i = decodeValue(base.data, i)
 		if lValue == "" {
 			b.del = append(b.del, lName)
 		}
@@ -612,8 +630,8 @@ func (b *Builder) Keep(ns ...string) *Builder {
 Outer:
 	for i := 0; i < len(b.base.data); {
 		var lName string
-		lName, i = decodeString(b.base.data, i)
-		_, i = decodeString(b.base.data, i)
+		lName, i = decodeName(b.base.data, i)
+		_, i = decodeValue(b.base.data, i)
 		for _, n := range ns {
 			if lName == n {
 				continue Outer
@@ -661,8 +679,8 @@ func (b *Builder) Labels() Labels {
 	for pos := 0; pos < len(b.base.data); {
 		oldPos := pos
 		var lName string
-		lName, pos = decodeString(b.base.data, pos)
-		_, pos = decodeString(b.base.data, pos)
+		lName, pos = decodeName(b.base.data, pos)
+		_, pos = decodeValue(b.base.data, pos)
 		for d < len(b.del) && b.del[d] < lName {
 			d++
 		}
@@ -695,14 +713,37 @@ func marshalLabelsToSizedBuffer(lbls []Label, data []byte) int {
 	return len(data) - i
 }
 
+const (
+	metricNameRune = rune(10)
+	jobRune        = rune(11)
+	instanceRune   = rune(12)
+	alertnameRune  = rune(13)
+)
+
 func marshalLabelToSizedBuffer(m *Label, data []byte) int {
+	var name string
+	switch m.Name {
+	case MetricName:
+		name = string(metricNameRune)
+	case "job":
+		name = string(jobRune)
+	case InstanceName:
+		name = string(instanceRune)
+	case "alertname":
+		name = string(alertnameRune)
+	default:
+		name = m.Name
+	}
+
 	i := len(data)
 	i -= len(m.Value)
 	copy(data[i:], m.Value)
 	i = encodeSize(data, i, len(m.Value))
-	i -= len(m.Name)
-	copy(data[i:], m.Name)
-	i = encodeSize(data, i, len(m.Name))
+
+	i -= len(name)
+	copy(data[i:], name)
+	i = encodeSize(data, i, len(name))
+
 	return len(data) - i
 }
 
@@ -760,7 +801,13 @@ func labelsSize(lbls []Label) (n int) {
 
 func labelSize(m *Label) (n int) {
 	// strings are encoded as length followed by contents.
-	l := len(m.Name)
+	var l int
+	switch m.Name {
+	case MetricName, InstanceName, "job", "alertname":
+		l = 1
+	default:
+		l = len(m.Name)
+	}
 	n += l + sizeVarint(uint64(l))
 	l = len(m.Value)
 	n += l + sizeVarint(uint64(l))
