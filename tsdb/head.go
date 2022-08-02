@@ -53,6 +53,9 @@ var (
 	// ErrAppenderClosed is returned if an appender has already be successfully
 	// rolled back or committed.
 	ErrAppenderClosed = errors.New("appender closed")
+	// ErrHEADLimitReached is returned if HEAD cannot create new series because
+	// it already holds maximum number of time series.
+	ErrHEADLimitReached = errors.New("HEAD series limit reached")
 
 	// defaultIsolationDisabled is true if isolation is disabled by default.
 	defaultIsolationDisabled = false
@@ -139,6 +142,8 @@ type HeadOptions struct {
 	EnableExemplarStorage          bool
 	EnableMemorySnapshotOnShutdown bool
 
+	MaxSeries uint64
+
 	IsolationDisabled bool
 }
 
@@ -152,6 +157,7 @@ func DefaultHeadOptions() *HeadOptions {
 		StripeSize:           DefaultStripeSize,
 		SeriesCallback:       &noopSeriesLifecycleCallback{},
 		IsolationDisabled:    defaultIsolationDisabled,
+		MaxSeries:            0,
 	}
 }
 
@@ -223,6 +229,10 @@ func NewHead(r prometheus.Registerer, l log.Logger, wal *wal.WAL, opts *HeadOpti
 		return nil, err
 	}
 
+	if opts.MaxSeries > 0 {
+		level.Info(h.logger).Log("msg", "Enabled HEAD series limit", "limit", opts.MaxSeries)
+	}
+
 	return h, nil
 }
 
@@ -265,6 +275,7 @@ type headMetrics struct {
 	seriesCreated            prometheus.Counter
 	seriesRemoved            prometheus.Counter
 	seriesNotFound           prometheus.Counter
+	seriesOverLimit          prometheus.Counter
 	chunks                   prometheus.Gauge
 	chunksCreated            prometheus.Counter
 	chunksRemoved            prometheus.Counter
@@ -308,6 +319,10 @@ func newHeadMetrics(h *Head, r prometheus.Registerer) *headMetrics {
 		seriesNotFound: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "prometheus_tsdb_head_series_not_found_total",
 			Help: "Total number of requests for series that were not found.",
+		}),
+		seriesOverLimit: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "prometheus_tsdb_head_series_over_limit_total",
+			Help: "Total number of series that were rejected because HEAD reached the total series limit.",
 		}),
 		chunks: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "prometheus_tsdb_head_chunks",
@@ -393,6 +408,7 @@ func newHeadMetrics(h *Head, r prometheus.Registerer) *headMetrics {
 			m.seriesCreated,
 			m.seriesRemoved,
 			m.seriesNotFound,
+			m.seriesOverLimit,
 			m.gcDuration,
 			m.walTruncateDuration,
 			m.walCorruptionsTotal,
@@ -1261,6 +1277,11 @@ func (h *Head) getOrCreate(hash uint64, lset labels.Labels) (*memSeries, bool, e
 	s := h.series.getByHash(hash, lset)
 	if s != nil {
 		return s, false, nil
+	}
+
+	if h.opts.MaxSeries > 0 && h.numSeries.Load() >= h.opts.MaxSeries {
+		h.metrics.seriesOverLimit.Inc()
+		return nil, false, ErrHEADLimitReached
 	}
 
 	// Optimistically assume that we are the first one to create the series.

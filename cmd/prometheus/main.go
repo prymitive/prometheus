@@ -321,6 +321,9 @@ func main() {
 	serverOnlyFlag(a, "storage.tsdb.head-chunks-write-queue-size", "Size of the queue through which head chunks are written to the disk to be m-mapped, 0 disables the queue completely. Experimental.").
 		Default("0").IntVar(&cfg.tsdb.HeadChunksWriteQueueSize)
 
+	serverOnlyFlag(a, "storage.tsdb.max-head-series", "Limit the number of time series tsdb HEAD can store at any time.").
+		Hidden().PlaceHolder("<numSeries>").Uint64Var(&cfg.tsdb.MaxHEADSeries)
+
 	agentOnlyFlag(a, "storage.agent.path", "Base path for metrics storage.").
 		Default("data-agent/").StringVar(&cfg.agentStoragePath)
 
@@ -1537,6 +1540,7 @@ type tsdbOptions struct {
 	EnableExemplarStorage          bool
 	MaxExemplars                   int64
 	EnableMemorySnapshotOnShutdown bool
+	MaxHEADSeries                  uint64
 }
 
 func (opts tsdbOptions) ToTSDBOptions() tsdb.Options {
@@ -1555,6 +1559,7 @@ func (opts tsdbOptions) ToTSDBOptions() tsdb.Options {
 		EnableExemplarStorage:          opts.EnableExemplarStorage,
 		MaxExemplars:                   opts.MaxExemplars,
 		EnableMemorySnapshotOnShutdown: opts.EnableMemorySnapshotOnShutdown,
+		MaxHEADSeries:                  opts.MaxHEADSeries,
 	}
 }
 

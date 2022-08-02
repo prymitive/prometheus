@@ -46,6 +46,7 @@ import (
 	"github.com/prometheus/prometheus/model/timestamp"
 	"github.com/prometheus/prometheus/model/value"
 	"github.com/prometheus/prometheus/storage"
+	"github.com/prometheus/prometheus/tsdb"
 	"github.com/prometheus/prometheus/util/pool"
 )
 
@@ -1444,6 +1445,7 @@ type appendErrors struct {
 	numDuplicates         int
 	numOutOfBounds        int
 	numExemplarOutOfOrder int
+	numOverLimit          int
 }
 
 func (sl *scrapeLoop) append(app storage.Appender, b []byte, contentType string, ts time.Time) (total, added, seriesAdded int, err error) {
@@ -1654,6 +1656,10 @@ func (sl *scrapeLoop) checkAddError(ce *cacheEntry, met []byte, tp *int64, err e
 		appErrs.numOutOfBounds++
 		level.Debug(sl.l).Log("msg", "Out of bounds metric", "series", string(met))
 		targetScrapeSampleOutOfBounds.Inc()
+		return false, nil
+	case tsdb.ErrHEADLimitReached:
+		appErrs.numOverLimit++
+		level.Warn(sl.l).Log("msg", "HEAD series limit reached, cannot append new series", "series", string(met))
 		return false, nil
 	case errSampleLimit:
 		// Keep on parsing output if we hit the limit, so we report the correct

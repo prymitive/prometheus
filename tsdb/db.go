@@ -158,6 +158,9 @@ type Options struct {
 	// See tsdb/exemplar.go, specifically the CircularExemplarStorage struct and it's constructor NewCircularExemplarStorage.
 	MaxExemplars int64
 
+	// MaxHEADSeries sets the time series limit for HEAD.
+	MaxHEADSeries uint64
+
 	// Disables isolation between reads and in-flight appends.
 	IsolationDisabled bool
 }
@@ -718,6 +721,7 @@ func open(dir string, l log.Logger, r prometheus.Registerer, opts *Options, rngs
 	headOpts.SeriesCallback = opts.SeriesLifecycleCallback
 	headOpts.EnableExemplarStorage = opts.EnableExemplarStorage
 	headOpts.MaxExemplars.Store(opts.MaxExemplars)
+	headOpts.MaxSeries = opts.MaxHEADSeries
 	headOpts.EnableMemorySnapshotOnShutdown = opts.EnableMemorySnapshotOnShutdown
 	if opts.IsolationDisabled {
 		// We only override this flag if isolation is disabled at DB level. We use the default otherwise.
