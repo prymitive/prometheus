@@ -37,6 +37,7 @@ The Prometheus monitoring server
 | <code class="text-nowrap">--storage.tsdb.retention.size</code> | Maximum number of bytes that can be stored for blocks. A unit is required, supported units: B, KB, MB, GB, TB, PB, EB. Ex: "512MB". Based on powers-of-2, so 1KB is 1024B. Use with server mode only. |  |
 | <code class="text-nowrap">--storage.tsdb.no-lockfile</code> | Do not create lockfile in data directory. Use with server mode only. | `false` |
 | <code class="text-nowrap">--storage.tsdb.head-chunks-write-queue-size</code> | Size of the queue through which head chunks are written to the disk to be m-mapped, 0 disables the queue completely. Experimental. Use with server mode only. | `0` |
+| <code class="text-nowrap">--storage.tsdb.max-head-series</code> | Limit the number of time series tsdb HEAD can store at any time. Use with server mode only. | `0` |
 | <code class="text-nowrap">--storage.agent.path</code> | Base path for metrics storage. Use with agent mode only. | `data-agent/` |
 | <code class="text-nowrap">--storage.agent.wal-compression</code> | Compress the agent WAL. Use with agent mode only. | `true` |
 | <code class="text-nowrap">--storage.agent.retention.min-time</code> | Minimum age samples may be before being considered for deletion when the WAL is truncated Use with agent mode only. |  |

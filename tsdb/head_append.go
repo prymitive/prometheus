@@ -433,18 +433,31 @@ func (a *headAppender) getOrCreate(lset labels.Labels) (*memSeries, error) {
 	if l, dup := lset.HasDuplicateLabelNames(); dup {
 		return nil, fmt.Errorf(`label name "%s" is not unique: %w`, l, ErrInvalidSample)
 	}
+	var s *memSeries
 	var created bool
 	var err error
-	s, created, err := a.head.getOrCreate(lset.Hash(), lset)
-	if err != nil {
-		return nil, err
+
+	lhash := lset.Hash()
+
+	s = a.head.series.getByHash(lhash, lset)
+	if s == nil {
+		if a.head.opts.MaxSeries > 0 && a.head.numSeries.Load() >= a.head.opts.MaxSeries {
+			a.head.metrics.seriesOverLimit.Inc()
+			return nil, storage.ErrCapacityExhaused
+		}
+
+		s, created, err = a.head.getOrCreate(lhash, lset)
+		if err != nil {
+			return nil, err
+		}
+		if created {
+			a.series = append(a.series, record.RefSeries{
+				Ref:    s.ref,
+				Labels: lset,
+			})
+		}
 	}
-	if created {
-		a.series = append(a.series, record.RefSeries{
-			Ref:    s.ref,
-			Labels: lset,
-		})
-	}
+
 	return s, nil
 }
 

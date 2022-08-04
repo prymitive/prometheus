@@ -1576,6 +1576,7 @@ func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 	total, added, seriesAdded, err := sl.append(app, []byte("metric_a 1\nmetric_b 1\nmetric_c 1\n"), "", now)
 	require.ErrorIs(t, err, errSampleLimit)
 	require.NoError(t, slApp.Rollback())
+	sl.cache.iterDone(true)
 	require.Equal(t, 3, total)
 	require.Equal(t, 3, added)
 	require.Equal(t, 1, seriesAdded)
