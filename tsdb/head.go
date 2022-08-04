@@ -157,6 +157,8 @@ type HeadOptions struct {
 	EnableExemplarStorage          bool
 	EnableMemorySnapshotOnShutdown bool
 
+	MaxSeries uint64
+
 	IsolationDisabled bool
 
 	// Maximum number of CPUs that can simultaneously processes WAL replay.
@@ -181,6 +183,7 @@ func DefaultHeadOptions() *HeadOptions {
 		SeriesCallback:       &noopSeriesLifecycleCallback{},
 		IsolationDisabled:    defaultIsolationDisabled,
 		WALReplayConcurrency: defaultWALReplayConcurrency,
+		MaxSeries:            0,
 	}
 	ho.OutOfOrderCapMax.Store(DefaultOutOfOrderCapMax)
 	return ho
@@ -271,6 +274,11 @@ func NewHead(r prometheus.Registerer, l log.Logger, wal, wbl *wlog.WL, opts *Hea
 		return nil, err
 	}
 
+	h.metrics.seriesLimit.Set(float64(opts.MaxSeries))
+	if opts.MaxSeries > 0 {
+		level.Info(h.logger).Log("msg", "Enabled HEAD series limit", "limit", opts.MaxSeries)
+	}
+
 	return h, nil
 }
 
@@ -336,6 +344,8 @@ type headMetrics struct {
 	mmapChunkCorruptionTotal  prometheus.Counter
 	snapshotReplayErrorTotal  prometheus.Counter // Will be either 0 or 1.
 	oooHistogram              prometheus.Histogram
+	seriesLimit               prometheus.Gauge
+	seriesOverLimit           prometheus.Counter
 }
 
 const (
@@ -366,6 +376,14 @@ func newHeadMetrics(h *Head, r prometheus.Registerer) *headMetrics {
 		seriesNotFound: prometheus.NewCounter(prometheus.CounterOpts{
 			Name: "prometheus_tsdb_head_series_not_found_total",
 			Help: "Total number of requests for series that were not found.",
+		}),
+		seriesLimit: prometheus.NewGauge(prometheus.GaugeOpts{
+			Name: "prometheus_tsdb_head_series_limit",
+			Help: "Currently set HEAD series limit.",
+		}),
+		seriesOverLimit: prometheus.NewCounter(prometheus.CounterOpts{
+			Name: "prometheus_tsdb_head_series_over_limit_total",
+			Help: "Total number of series that were rejected because HEAD reached the total series limit.",
 		}),
 		chunks: prometheus.NewGauge(prometheus.GaugeOpts{
 			Name: "prometheus_tsdb_head_chunks",
@@ -472,6 +490,8 @@ func newHeadMetrics(h *Head, r prometheus.Registerer) *headMetrics {
 			m.seriesCreated,
 			m.seriesRemoved,
 			m.seriesNotFound,
+			m.seriesOverLimit,
+			m.seriesLimit,
 			m.gcDuration,
 			m.walTruncateDuration,
 			m.walCorruptionsTotal,
