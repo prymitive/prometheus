@@ -408,6 +408,9 @@ func main() {
 	serverOnlyFlag(a, "storage.tsdb.samples-per-chunk", "Target number of samples per chunk.").
 		Default("120").Hidden().IntVar(&cfg.tsdb.SamplesPerChunk)
 
+	serverOnlyFlag(a, "storage.tsdb.max-head-series", "Limit the number of time series tsdb HEAD can store at any time.").
+		Default("0").Uint64Var(&cfg.tsdb.MaxHEADSeries)
+
 	agentOnlyFlag(a, "storage.agent.path", "Base path for metrics storage.").
 		Default("data-agent/").StringVar(&cfg.agentStoragePath)
 
@@ -1754,6 +1757,7 @@ type tsdbOptions struct {
 	EnableNativeHistograms         bool
 	EnableDelayedCompaction        bool
 	EnableOverlappingCompaction    bool
+	MaxHEADSeries                  uint64
 }
 
 func (opts tsdbOptions) ToTSDBOptions() tsdb.Options {
@@ -1776,6 +1780,7 @@ func (opts tsdbOptions) ToTSDBOptions() tsdb.Options {
 		OutOfOrderTimeWindow:           opts.OutOfOrderTimeWindow,
 		EnableDelayedCompaction:        opts.EnableDelayedCompaction,
 		EnableOverlappingCompaction:    opts.EnableOverlappingCompaction,
+		MaxHEADSeries:                  opts.MaxHEADSeries,
 	}
 }
 
