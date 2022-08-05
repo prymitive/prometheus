@@ -774,15 +774,15 @@ func TestScrapeLoopStop(t *testing.T) {
 		require.FailNow(t, "Scrape wasn't stopped.")
 	}
 
-	// We expected 1 actual sample for each scrape plus 5 for report samples.
+	// We expected 1 actual sample for each scrape plus 6 for report samples.
 	// At least 2 scrapes were made, plus the final stale markers.
-	require.GreaterOrEqual(t, len(appender.resultFloats), 6*3, "Expected at least 3 scrapes with 6 samples each.")
-	require.Zero(t, len(appender.resultFloats)%6, "There is a scrape with missing samples.")
+	require.GreaterOrEqual(t, len(appender.resultFloats), 7*3, "Expected at least 3 scrapes with 6 samples each.")
+	require.Zero(t, len(appender.resultFloats)%7, "There is a scrape with missing samples.")
 	// All samples in a scrape must have the same timestamp.
 	var ts int64
 	for i, s := range appender.resultFloats {
 		switch {
-		case i%6 == 0:
+		case i%7 == 0:
 			ts = s.t
 		case s.t != ts:
 			t.Fatalf("Unexpected multiple timestamps within single scrape")
@@ -980,7 +980,7 @@ func TestScrapeLoopMetadata(t *testing.T) {
 	defer cancel()
 
 	slApp := sl.appender(ctx)
-	total, _, _, err := sl.append(slApp, []byte(`# TYPE test_metric counter
+	total, _, _, _, err := sl.append(slApp, []byte(`# TYPE test_metric counter
 # HELP test_metric some help text
 # UNIT test_metric metric
 test_metric 1
@@ -1026,20 +1026,22 @@ func TestScrapeLoopSeriesAdded(t *testing.T) {
 	ctx, sl := simpleTestScrapeLoop(t)
 
 	slApp := sl.appender(ctx)
-	total, added, seriesAdded, err := sl.append(slApp, []byte("test_metric 1\n"), "", time.Time{})
+	total, added, seriesAdded, overLimit, err := sl.append(slApp, []byte("test_metric 1\n"), "", time.Time{})
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 	require.Equal(t, 1, total)
 	require.Equal(t, 1, added)
 	require.Equal(t, 1, seriesAdded)
+	require.Equal(t, 0, overLimit)
 
 	slApp = sl.appender(ctx)
-	total, added, seriesAdded, err = sl.append(slApp, []byte("test_metric 1\n"), "", time.Time{})
+	total, added, seriesAdded, overLimit, err = sl.append(slApp, []byte("test_metric 1\n"), "", time.Time{})
 	require.NoError(t, slApp.Commit())
 	require.NoError(t, err)
 	require.Equal(t, 1, total)
 	require.Equal(t, 1, added)
 	require.Equal(t, 0, seriesAdded)
+	require.Equal(t, 0, overLimit)
 }
 
 func TestScrapeLoopFailWithInvalidLabelsAfterRelabel(t *testing.T) {
@@ -1063,7 +1065,7 @@ func TestScrapeLoopFailWithInvalidLabelsAfterRelabel(t *testing.T) {
 	}
 
 	slApp := sl.appender(ctx)
-	total, added, seriesAdded, err := sl.append(slApp, []byte("test_metric 1\n"), "", time.Time{})
+	total, added, seriesAdded, _, err := sl.append(slApp, []byte("test_metric 1\n"), "", time.Time{})
 	require.ErrorContains(t, err, "invalid metric name or label names")
 	require.NoError(t, slApp.Rollback())
 	require.Equal(t, 1, total)
@@ -1087,7 +1089,7 @@ func TestScrapeLoopFailLegacyUnderUTF8(t *testing.T) {
 	sl.validationScheme = model.LegacyValidation
 
 	slApp := sl.appender(ctx)
-	total, added, seriesAdded, err := sl.append(slApp, []byte("{\"test.metric\"} 1\n"), "", time.Time{})
+	total, added, seriesAdded, _, err := sl.append(slApp, []byte("{\"test.metric\"} 1\n"), "", time.Time{})
 	require.ErrorContains(t, err, "invalid metric name or label names")
 	require.NoError(t, slApp.Rollback())
 	require.Equal(t, 1, total)
@@ -1098,7 +1100,7 @@ func TestScrapeLoopFailLegacyUnderUTF8(t *testing.T) {
 	sl.validationScheme = model.UTF8Validation
 
 	slApp = sl.appender(ctx)
-	total, added, seriesAdded, err = sl.append(slApp, []byte("{\"test.metric\"} 1\n"), "", time.Time{})
+	total, added, seriesAdded, _, err = sl.append(slApp, []byte("{\"test.metric\"} 1\n"), "", time.Time{})
 	require.NoError(t, err)
 	require.Equal(t, 1, total)
 	require.Equal(t, 1, added)
@@ -1128,7 +1130,7 @@ func BenchmarkScrapeLoopAppend(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		ts = ts.Add(time.Second)
-		_, _, _, _ = sl.append(slApp, metrics, "", ts)
+		_, _, _, _, _ = sl.append(slApp, metrics, "", ts)
 	}
 }
 
@@ -1143,7 +1145,7 @@ func BenchmarkScrapeLoopAppendOM(b *testing.B) {
 
 	for i := 0; i < b.N; i++ {
 		ts = ts.Add(time.Second)
-		_, _, _, _ = sl.append(slApp, metrics, "application/openmetrics-text", ts)
+		_, _, _, _, _ = sl.append(slApp, metrics, "application/openmetrics-text", ts)
 	}
 }
 
@@ -1184,12 +1186,12 @@ func TestScrapeLoopRunCreatesStaleMarkersOnFailedScrape(t *testing.T) {
 		require.FailNow(t, "Scrape wasn't stopped.")
 	}
 
-	// 1 successfully scraped sample, 1 stale marker after first fail, 5 report samples for
+	// 1 successfully scraped sample, 1 stale marker after first fail, 6 report samples for
 	// each scrape successful or not.
-	require.Len(t, appender.resultFloats, 27, "Appended samples not as expected:\n%s", appender)
+	require.Len(t, appender.resultFloats, 32, "Appended samples not as expected:\n%s", appender)
 	require.Equal(t, 42.0, appender.resultFloats[0].f, "Appended first sample not as expected")
-	require.True(t, value.IsStaleNaN(appender.resultFloats[6].f),
-		"Appended second sample not as expected. Wanted: stale NaN Got: %x", math.Float64bits(appender.resultFloats[6].f))
+	require.True(t, value.IsStaleNaN(appender.resultFloats[7].f),
+		"Appended second sample not as expected. Wanted: stale NaN Got: %x", math.Float64bits(appender.resultFloats[7].f))
 }
 
 func TestScrapeLoopRunCreatesStaleMarkersOnParseFailure(t *testing.T) {
@@ -1231,12 +1233,12 @@ func TestScrapeLoopRunCreatesStaleMarkersOnParseFailure(t *testing.T) {
 		require.FailNow(t, "Scrape wasn't stopped.")
 	}
 
-	// 1 successfully scraped sample, 1 stale marker after first fail, 5 report samples for
+	// 1 successfully scraped sample, 1 stale marker after first fail, 6 report samples for
 	// each scrape successful or not.
-	require.Len(t, appender.resultFloats, 17, "Appended samples not as expected:\n%s", appender)
+	require.Len(t, appender.resultFloats, 20, "Appended samples not as expected:\n%s", appender)
 	require.Equal(t, 42.0, appender.resultFloats[0].f, "Appended first sample not as expected")
-	require.True(t, value.IsStaleNaN(appender.resultFloats[6].f),
-		"Appended second sample not as expected. Wanted: stale NaN Got: %x", math.Float64bits(appender.resultFloats[6].f))
+	require.True(t, value.IsStaleNaN(appender.resultFloats[7].f),
+		"Appended second sample not as expected. Wanted: stale NaN Got: %x", math.Float64bits(appender.resultFloats[7].f))
 }
 
 func TestScrapeLoopCache(t *testing.T) {
@@ -1296,9 +1298,9 @@ func TestScrapeLoopCache(t *testing.T) {
 		require.FailNow(t, "Scrape wasn't stopped.")
 	}
 
-	// 1 successfully scraped sample, 1 stale marker after first fail, 5 report samples for
+	// 1 successfully scraped sample, 1 stale marker after first fail, 6 report samples for
 	// each scrape successful or not.
-	require.Len(t, appender.resultFloats, 26, "Appended samples not as expected:\n%s", appender)
+	require.Len(t, appender.resultFloats, 30, "Appended samples not as expected:\n%s", appender)
 }
 
 func TestScrapeLoopCacheMemoryExhaustionProtection(t *testing.T) {
@@ -1418,7 +1420,7 @@ func TestScrapeLoopAppend(t *testing.T) {
 		now := time.Now()
 
 		slApp := sl.appender(context.Background())
-		_, _, _, err := sl.append(slApp, []byte(test.scrapeLabels), "", now)
+		_, _, _, _, err := sl.append(slApp, []byte(test.scrapeLabels), "", now)
 		require.NoError(t, err)
 		require.NoError(t, slApp.Commit())
 
@@ -1499,7 +1501,7 @@ func TestScrapeLoopAppendForConflictingPrefixedLabels(t *testing.T) {
 				return mutateSampleLabels(l, &Target{labels: labels.FromStrings(tc.targetLabels...)}, false, nil)
 			}
 			slApp := sl.appender(context.Background())
-			_, _, _, err := sl.append(slApp, []byte(tc.exposedLabels), "", time.Date(2000, 1, 1, 1, 0, 0, 0, time.UTC))
+			_, _, _, _, err := sl.append(slApp, []byte(tc.exposedLabels), "", time.Date(2000, 1, 1, 1, 0, 0, 0, time.UTC))
 			require.NoError(t, err)
 
 			require.NoError(t, slApp.Commit())
@@ -1536,7 +1538,7 @@ func TestScrapeLoopAppendCacheEntryButErrNotFound(t *testing.T) {
 	now := time.Now()
 
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, metric, "", now)
+	_, _, _, _, err := sl.append(slApp, metric, "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -1573,13 +1575,14 @@ func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	total, added, seriesAdded, err := sl.append(app, []byte("metric_a 1\nmetric_b 1\nmetric_c 1\n"), "", now)
+	total, added, seriesAdded, overLimit, err := sl.append(app, []byte("metric_a 1\nmetric_b 1\nmetric_c 1\n"), "", now)
 	require.ErrorIs(t, err, errSampleLimit)
 	require.NoError(t, slApp.Rollback())
 	sl.cache.iterDone(true)
 	require.Equal(t, 3, total)
 	require.Equal(t, 3, added)
 	require.Equal(t, 1, seriesAdded)
+	require.Equal(t, 0, overLimit)
 
 	// Check that the Counter has been incremented a single time for the scrape,
 	// not multiple times for each sample.
@@ -1603,12 +1606,13 @@ func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 
 	now = time.Now()
 	slApp = sl.appender(context.Background())
-	total, added, seriesAdded, err = sl.append(slApp, []byte("metric_a 1\nmetric_b 1\nmetric_c{deleteme=\"yes\"} 1\nmetric_d 1\nmetric_e 1\nmetric_f 1\nmetric_g 1\nmetric_h{deleteme=\"yes\"} 1\nmetric_i{deleteme=\"yes\"} 1\n"), "", now)
+	total, added, seriesAdded, overLimit, err = sl.append(slApp, []byte("metric_a 1\nmetric_b 1\nmetric_c{deleteme=\"yes\"} 1\nmetric_d 1\nmetric_e 1\nmetric_f 1\nmetric_g 1\nmetric_h{deleteme=\"yes\"} 1\nmetric_i{deleteme=\"yes\"} 1\n"), "", now)
 	require.ErrorIs(t, err, errSampleLimit)
 	require.NoError(t, slApp.Rollback())
 	require.Equal(t, 9, total)
 	require.Equal(t, 6, added)
 	require.Equal(t, 0, seriesAdded)
+	require.Equal(t, 0, overLimit)
 }
 
 func TestScrapeLoop_HistogramBucketLimit(t *testing.T) {
@@ -1658,7 +1662,7 @@ func TestScrapeLoop_HistogramBucketLimit(t *testing.T) {
 	require.NoError(t, err)
 
 	now := time.Now()
-	total, added, seriesAdded, err := sl.append(app, msg, "application/vnd.google.protobuf", now)
+	total, added, seriesAdded, _, err := sl.append(app, msg, "application/vnd.google.protobuf", now)
 	require.NoError(t, err)
 	require.Equal(t, 3, total)
 	require.Equal(t, 3, added)
@@ -1681,7 +1685,7 @@ func TestScrapeLoop_HistogramBucketLimit(t *testing.T) {
 	require.NoError(t, err)
 
 	now = time.Now()
-	total, added, seriesAdded, err = sl.append(app, msg, "application/vnd.google.protobuf", now)
+	total, added, seriesAdded, _, err = sl.append(app, msg, "application/vnd.google.protobuf", now)
 	require.NoError(t, err)
 	require.Equal(t, 3, total)
 	require.Equal(t, 3, added)
@@ -1704,7 +1708,7 @@ func TestScrapeLoop_HistogramBucketLimit(t *testing.T) {
 	require.NoError(t, err)
 
 	now = time.Now()
-	total, added, seriesAdded, err = sl.append(app, msg, "application/vnd.google.protobuf", now)
+	total, added, seriesAdded, _, err = sl.append(app, msg, "application/vnd.google.protobuf", now)
 	if !errors.Is(err, errBucketLimit) {
 		t.Fatalf("Did not see expected histogram bucket limit error: %s", err)
 	}
@@ -1731,12 +1735,12 @@ func TestScrapeLoop_ChangingMetricString(t *testing.T) {
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1`), "", now)
+	_, _, _, _, err := sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1`), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
 	slApp = sl.appender(context.Background())
-	_, _, _, err = sl.append(slApp, []byte(`metric_a{b="1",a="1"} 2`), "", now.Add(time.Minute))
+	_, _, _, _, err = sl.append(slApp, []byte(`metric_a{b="1",a="1"} 2`), "", now.Add(time.Minute))
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -1762,12 +1766,12 @@ func TestScrapeLoopAppendStaleness(t *testing.T) {
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte("metric_a 1\n"), "", now)
+	_, _, _, _, err := sl.append(slApp, []byte("metric_a 1\n"), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
 	slApp = sl.appender(context.Background())
-	_, _, _, err = sl.append(slApp, []byte(""), "", now.Add(time.Second))
+	_, _, _, _, err = sl.append(slApp, []byte(""), "", now.Add(time.Second))
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -1791,12 +1795,12 @@ func TestScrapeLoopAppendNoStalenessIfTimestamp(t *testing.T) {
 	sl := newBasicScrapeLoop(t, context.Background(), nil, func(ctx context.Context) storage.Appender { return app }, 0)
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte("metric_a 1 1000\n"), "", now)
+	_, _, _, _, err := sl.append(slApp, []byte("metric_a 1 1000\n"), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
 	slApp = sl.appender(context.Background())
-	_, _, _, err = sl.append(slApp, []byte(""), "", now.Add(time.Second))
+	_, _, _, _, err = sl.append(slApp, []byte(""), "", now.Add(time.Second))
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -1817,12 +1821,12 @@ func TestScrapeLoopAppendStalenessIfTrackTimestampStaleness(t *testing.T) {
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte("metric_a 1 1000\n"), "", now)
+	_, _, _, _, err := sl.append(slApp, []byte("metric_a 1 1000\n"), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
 	slApp = sl.appender(context.Background())
-	_, _, _, err = sl.append(slApp, []byte(""), "", now.Add(time.Second))
+	_, _, _, _, err = sl.append(slApp, []byte(""), "", now.Add(time.Second))
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -2209,7 +2213,7 @@ metric: <
 				buf.WriteString(test.scrapeText)
 			}
 
-			_, _, _, err := sl.append(app, buf.Bytes(), test.contentType, now)
+			_, _, _, _, err := sl.append(app, buf.Bytes(), test.contentType, now)
 			require.NoError(t, err)
 			require.NoError(t, app.Commit())
 			requireEqual(t, test.floats, app.resultFloats)
@@ -2264,7 +2268,7 @@ func TestScrapeLoopAppendExemplarSeries(t *testing.T) {
 	}
 
 	for i, st := range scrapeText {
-		_, _, _, err := sl.append(app, []byte(st), "application/openmetrics-text", timestamp.Time(samples[i].t))
+		_, _, _, _, err := sl.append(app, []byte(st), "application/openmetrics-text", timestamp.Time(samples[i].t))
 		require.NoError(t, err)
 		require.NoError(t, app.Commit())
 	}
@@ -2335,7 +2339,7 @@ func TestScrapeLoopAppendGracefullyIfAmendOrOutOfOrderOrOutOfBounds(t *testing.T
 
 	now := time.Unix(1, 0)
 	slApp := sl.appender(context.Background())
-	total, added, seriesAdded, err := sl.append(slApp, []byte("out_of_order 1\namend 1\nnormal 1\nout_of_bounds 1\n"), "", now)
+	total, added, seriesAdded, overLimit, err := sl.append(slApp, []byte("out_of_order 1\namend 1\nnormal 1\nout_of_bounds 1\n"), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -2350,6 +2354,7 @@ func TestScrapeLoopAppendGracefullyIfAmendOrOutOfOrderOrOutOfBounds(t *testing.T
 	require.Equal(t, 4, total)
 	require.Equal(t, 4, added)
 	require.Equal(t, 1, seriesAdded)
+	require.Equal(t, 0, overLimit)
 }
 
 func TestScrapeLoopOutOfBoundsTimeError(t *testing.T) {
@@ -2366,12 +2371,13 @@ func TestScrapeLoopOutOfBoundsTimeError(t *testing.T) {
 
 	now := time.Now().Add(20 * time.Minute)
 	slApp := sl.appender(context.Background())
-	total, added, seriesAdded, err := sl.append(slApp, []byte("normal 1\n"), "", now)
+	total, added, seriesAdded, overLimit, err := sl.append(slApp, []byte("normal 1\n"), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 	require.Equal(t, 1, total)
 	require.Equal(t, 1, added)
 	require.Equal(t, 0, seriesAdded)
+	require.Equal(t, 0, overLimit)
 }
 
 func TestTargetScraperScrapeOK(t *testing.T) {
@@ -2652,7 +2658,7 @@ func TestScrapeLoop_RespectTimestamps(t *testing.T) {
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1 0`), "", now)
+	_, _, _, _, err := sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1 0`), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -2679,7 +2685,7 @@ func TestScrapeLoop_DiscardTimestamps(t *testing.T) {
 
 	now := time.Now()
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1 0`), "", now)
+	_, _, _, _, err := sl.append(slApp, []byte(`metric_a{a="1",b="1"} 1 0`), "", now)
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -2703,7 +2709,7 @@ func TestScrapeLoopDiscardDuplicateLabels(t *testing.T) {
 
 	// We add a good and a bad metric to check that both are discarded.
 	slApp := sl.appender(ctx)
-	_, _, _, err := sl.append(slApp, []byte("test_metric{le=\"500\"} 1\ntest_metric{le=\"600\",le=\"700\"} 1\n"), "", time.Time{})
+	_, _, _, _, err := sl.append(slApp, []byte("test_metric{le=\"500\"} 1\ntest_metric{le=\"600\",le=\"700\"} 1\n"), "", time.Time{})
 	require.Error(t, err)
 	require.NoError(t, slApp.Rollback())
 	// We need to cycle staleness cache maps after a manual rollback. Otherwise they will have old entries in them,
@@ -2718,7 +2724,7 @@ func TestScrapeLoopDiscardDuplicateLabels(t *testing.T) {
 
 	// We add a good metric to check that it is recorded.
 	slApp = sl.appender(ctx)
-	_, _, _, err = sl.append(slApp, []byte("test_metric{le=\"500\"} 1\n"), "", time.Time{})
+	_, _, _, _, err = sl.append(slApp, []byte("test_metric{le=\"500\"} 1\n"), "", time.Time{})
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -2747,7 +2753,7 @@ func TestScrapeLoopDiscardUnnamedMetrics(t *testing.T) {
 	defer cancel()
 
 	slApp := sl.appender(context.Background())
-	_, _, _, err := sl.append(slApp, []byte("nok 1\nnok2{drop=\"drop\"} 1\n"), "", time.Time{})
+	_, _, _, _, err := sl.append(slApp, []byte("nok 1\nnok2{drop=\"drop\"} 1\n"), "", time.Time{})
 	require.Error(t, err)
 	require.NoError(t, slApp.Rollback())
 	require.Equal(t, errNameLabelMandatory, err)
@@ -2993,7 +2999,7 @@ func TestScrapeAddFast(t *testing.T) {
 	defer cancel()
 
 	slApp := sl.appender(ctx)
-	_, _, _, err := sl.append(slApp, []byte("up 1\n"), "", time.Time{})
+	_, _, _, _, err := sl.append(slApp, []byte("up 1\n"), "", time.Time{})
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 
@@ -3004,7 +3010,7 @@ func TestScrapeAddFast(t *testing.T) {
 	}
 
 	slApp = sl.appender(ctx)
-	_, _, _, err = sl.append(slApp, []byte("up 1\n"), "", time.Time{}.Add(time.Second))
+	_, _, _, _, err = sl.append(slApp, []byte("up 1\n"), "", time.Time{}.Add(time.Second))
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 }
@@ -3091,7 +3097,7 @@ func TestScrapeReportSingleAppender(t *testing.T) {
 			}
 		}
 
-		require.Equal(t, 0, c%9, "Appended samples not as expected: %d", c)
+		require.Equal(t, 0, c%10, "Appended samples not as expected: %d", c)
 		q.Close()
 	}
 	cancel()
@@ -3251,7 +3257,7 @@ func TestScrapeLoopLabelLimit(t *testing.T) {
 		sl.labelLimits = &test.labelLimits
 
 		slApp := sl.appender(context.Background())
-		_, _, _, err := sl.append(slApp, []byte(test.scrapeLabels), "", time.Now())
+		_, _, _, _, err := sl.append(slApp, []byte(test.scrapeLabels), "", time.Now())
 
 		t.Logf("Test:%s", test.title)
 		if test.expectErr {
@@ -3465,10 +3471,10 @@ func TestScrapeLoopRunCreatesStaleMarkersOnFailedScrapeForTimestampedMetrics(t *
 
 	// 1 successfully scraped sample, 1 stale marker after first fail, 5 report samples for
 	// each scrape successful or not.
-	require.Len(t, appender.resultFloats, 27, "Appended samples not as expected:\n%s", appender)
+	require.Len(t, appender.resultFloats, 32, "Appended samples not as expected:\n%s", appender)
 	require.Equal(t, 42.0, appender.resultFloats[0].f, "Appended first sample not as expected")
-	require.True(t, value.IsStaleNaN(appender.resultFloats[6].f),
-		"Appended second sample not as expected. Wanted: stale NaN Got: %x", math.Float64bits(appender.resultFloats[6].f))
+	require.True(t, value.IsStaleNaN(appender.resultFloats[7].f),
+		"Appended second sample not as expected. Wanted: stale NaN Got: %x", math.Float64bits(appender.resultFloats[7].f))
 }
 
 func TestScrapeLoopCompression(t *testing.T) {
@@ -3680,7 +3686,7 @@ func TestScrapeLoopSeriesAddedDuplicates(t *testing.T) {
 	ctx, sl := simpleTestScrapeLoop(t)
 
 	slApp := sl.appender(ctx)
-	total, added, seriesAdded, err := sl.append(slApp, []byte("test_metric 1\ntest_metric 2\ntest_metric 3\n"), "", time.Time{})
+	total, added, seriesAdded, _, err := sl.append(slApp, []byte("test_metric 1\ntest_metric 2\ntest_metric 3\n"), "", time.Time{})
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 	require.Equal(t, 3, total)
@@ -3689,7 +3695,7 @@ func TestScrapeLoopSeriesAddedDuplicates(t *testing.T) {
 	require.Equal(t, 2.0, prom_testutil.ToFloat64(sl.metrics.targetScrapeSampleDuplicate))
 
 	slApp = sl.appender(ctx)
-	total, added, seriesAdded, err = sl.append(slApp, []byte("test_metric 1\ntest_metric 1\ntest_metric 1\n"), "", time.Time{})
+	total, added, seriesAdded, _, err = sl.append(slApp, []byte("test_metric 1\ntest_metric 1\ntest_metric 1\n"), "", time.Time{})
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 	require.Equal(t, 3, total)
@@ -3699,7 +3705,7 @@ func TestScrapeLoopSeriesAddedDuplicates(t *testing.T) {
 
 	// When different timestamps are supplied, multiple samples are accepted.
 	slApp = sl.appender(ctx)
-	total, added, seriesAdded, err = sl.append(slApp, []byte("test_metric 1 1001\ntest_metric 1 1002\ntest_metric 1 1003\n"), "", time.Time{})
+	total, added, seriesAdded, _, err = sl.append(slApp, []byte("test_metric 1 1001\ntest_metric 1 1002\ntest_metric 1 1003\n"), "", time.Time{})
 	require.NoError(t, err)
 	require.NoError(t, slApp.Commit())
 	require.Equal(t, 3, total)

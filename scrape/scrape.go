@@ -1343,7 +1343,7 @@ func (sl *scrapeLoop) scrapeAndReport(last, appendTime time.Time, errc chan<- er
 		)
 	}
 
-	var total, added, seriesAdded, bytesRead int
+	var total, added, seriesAdded, overLimit, bytesRead int
 	var err, appErr, scrapeErr error
 
 	app := sl.appender(sl.appenderCtx)
@@ -1359,7 +1359,7 @@ func (sl *scrapeLoop) scrapeAndReport(last, appendTime time.Time, errc chan<- er
 	}()
 
 	defer func() {
-		if err = sl.report(app, appendTime, time.Since(start), total, added, seriesAdded, bytesRead, scrapeErr); err != nil {
+		if err = sl.report(app, appendTime, time.Since(start), total, added, seriesAdded, overLimit, bytesRead, scrapeErr); err != nil {
 			level.Warn(sl.l).Log("msg", "Appending scrape report failed", "err", err)
 		}
 	}()
@@ -1367,7 +1367,7 @@ func (sl *scrapeLoop) scrapeAndReport(last, appendTime time.Time, errc chan<- er
 	if forcedErr := sl.getForcedError(); forcedErr != nil {
 		scrapeErr = forcedErr
 		// Add stale markers.
-		if _, _, _, err := sl.append(app, []byte{}, "", appendTime); err != nil {
+		if _, _, _, _, err := sl.append(app, []byte{}, "", appendTime); err != nil {
 			app.Rollback()
 			app = sl.appender(sl.appenderCtx)
 			level.Warn(sl.l).Log("msg", "Append failed", "err", err)
@@ -1419,14 +1419,16 @@ func (sl *scrapeLoop) scrapeAndReport(last, appendTime time.Time, errc chan<- er
 
 	// A failed scrape is the same as an empty scrape,
 	// we still call sl.append to trigger stale markers.
-	total, added, seriesAdded, appErr = sl.append(app, b, contentType, appendTime)
-	if appErr != nil {
+	total, added, seriesAdded, overLimit, appErr = sl.append(app, b, contentType, appendTime)
+	// We ignore ErrHEADLimitReached error since it means HEAD is at capacity
+	// but still accepting appends to series already stored on HEAD
+	if appErr != nil && !errors.Is(appErr, storage.ErrCapacityExhaused) {
 		app.Rollback()
 		app = sl.appender(sl.appenderCtx)
 		level.Debug(sl.l).Log("msg", "Append failed", "err", appErr)
 		// The append failed, probably due to a parse error or sample limit.
 		// Call sl.append again with an empty scrape to trigger stale markers.
-		if _, _, _, err := sl.append(app, []byte{}, "", appendTime); err != nil {
+		if _, _, _, _, err := sl.append(app, []byte{}, "", appendTime); err != nil {
 			app.Rollback()
 			app = sl.appender(sl.appenderCtx)
 			level.Warn(sl.l).Log("msg", "Append failed", "err", err)
@@ -1505,7 +1507,7 @@ func (sl *scrapeLoop) endOfRunStaleness(last time.Time, ticker *time.Ticker, int
 			level.Warn(sl.l).Log("msg", "Stale commit failed", "err", err)
 		}
 	}()
-	if _, _, _, err = sl.append(app, []byte{}, "", staleTime); err != nil {
+	if _, _, _, _, err = sl.append(app, []byte{}, "", staleTime); err != nil {
 		app.Rollback()
 		app = sl.appender(sl.appenderCtx)
 		level.Warn(sl.l).Log("msg", "Stale append failed", "err", err)
@@ -1535,9 +1537,11 @@ type appendErrors struct {
 	numDuplicates         int
 	numOutOfBounds        int
 	numExemplarOutOfOrder int
+	numOverLimit          int
+	lastMetricOverLimit   string
 }
 
-func (sl *scrapeLoop) append(app storage.Appender, b []byte, contentType string, ts time.Time) (total, added, seriesAdded int, err error) {
+func (sl *scrapeLoop) append(app storage.Appender, b []byte, contentType string, ts time.Time) (total, added, seriesAdded, overLimit int, err error) {
 	p, err := textparse.New(b, contentType, sl.scrapeClassicHistograms, sl.symbolTable)
 	if err != nil {
 		level.Debug(sl.l).Log(
@@ -1813,6 +1817,17 @@ loop:
 		// We only want to increment this once per scrape, so this is Inc'd outside the loop.
 		sl.metrics.targetScrapeNativeHistogramBucketLimit.Inc()
 	}
+	if appErrs.numOverLimit > 0 {
+		level.Debug(sl.l).Log("msg", "HEAD series limit reached, cannot append new series", "num_dropped", appErrs.numOverLimit)
+		if err == nil {
+			if appErrs.numOverLimit == 1 {
+				err = fmt.Errorf("%w, cannot append new series for %s", storage.ErrCapacityExhaused, appErrs.lastMetricOverLimit)
+			} else {
+				err = fmt.Errorf("%w, cannot append new series for %s and %d other metrics", storage.ErrCapacityExhaused, appErrs.lastMetricOverLimit, appErrs.numOverLimit-1)
+			}
+		}
+		overLimit += appErrs.numOverLimit
+	}
 	if appErrs.numOutOfOrder > 0 {
 		level.Warn(sl.l).Log("msg", "Error on ingesting out-of-order samples", "num_dropped", appErrs.numOutOfOrder)
 	}
@@ -1830,7 +1845,7 @@ loop:
 			// Series no longer exposed, mark it stale.
 			_, err = app.Append(0, lset, defTime, math.Float64frombits(value.StaleNaN))
 			switch {
-			case errors.Is(err, storage.ErrOutOfOrderSample), errors.Is(err, storage.ErrDuplicateSampleForTimestamp):
+			case errors.Is(err, storage.ErrOutOfOrderSample), errors.Is(err, storage.ErrDuplicateSampleForTimestamp), errors.Is(err, storage.ErrCapacityExhaused):
 				// Do not count these in logging, as this is expected if a target
 				// goes away and comes back again with a new scrape loop.
 				err = nil
@@ -1864,6 +1879,11 @@ func (sl *scrapeLoop) checkAddError(met []byte, err error, sampleLimitErr, bucke
 		level.Debug(sl.l).Log("msg", "Out of bounds metric", "series", string(met))
 		sl.metrics.targetScrapeSampleOutOfBounds.Inc()
 		return false, nil
+	case errors.Is(err, storage.ErrCapacityExhaused):
+		appErrs.numOverLimit++
+		appErrs.lastMetricOverLimit = string(met)
+		level.Debug(sl.l).Log("msg", err, "series", string(met))
+		return false, nil
 	case errors.Is(err, errSampleLimit):
 		// Keep on parsing output if we hit the limit, so we report the correct
 		// total number of samples scraped.
@@ -1882,17 +1902,18 @@ func (sl *scrapeLoop) checkAddError(met []byte, err error, sampleLimitErr, bucke
 // The constants are suffixed with the invalid \xff unicode rune to avoid collisions
 // with scraped metrics in the cache.
 var (
-	scrapeHealthMetricName        = []byte("up" + "\xff")
-	scrapeDurationMetricName      = []byte("scrape_duration_seconds" + "\xff")
-	scrapeSamplesMetricName       = []byte("scrape_samples_scraped" + "\xff")
-	samplesPostRelabelMetricName  = []byte("scrape_samples_post_metric_relabeling" + "\xff")
-	scrapeSeriesAddedMetricName   = []byte("scrape_series_added" + "\xff")
-	scrapeTimeoutMetricName       = []byte("scrape_timeout_seconds" + "\xff")
-	scrapeSampleLimitMetricName   = []byte("scrape_sample_limit" + "\xff")
-	scrapeBodySizeBytesMetricName = []byte("scrape_body_size_bytes" + "\xff")
+	scrapeHealthMetricName          = []byte("up" + "\xff")
+	scrapeDurationMetricName        = []byte("scrape_duration_seconds" + "\xff")
+	scrapeSamplesMetricName         = []byte("scrape_samples_scraped" + "\xff")
+	samplesPostRelabelMetricName    = []byte("scrape_samples_post_metric_relabeling" + "\xff")
+	scrapeSeriesAddedMetricName     = []byte("scrape_series_added" + "\xff")
+	scrapeSeriesOverLimitMetricName = []byte("scrape_series_over_limit" + "\xff")
+	scrapeTimeoutMetricName         = []byte("scrape_timeout_seconds" + "\xff")
+	scrapeSampleLimitMetricName     = []byte("scrape_sample_limit" + "\xff")
+	scrapeBodySizeBytesMetricName   = []byte("scrape_body_size_bytes" + "\xff")
 )
 
-func (sl *scrapeLoop) report(app storage.Appender, start time.Time, duration time.Duration, scraped, added, seriesAdded, bytes int, scrapeErr error) (err error) {
+func (sl *scrapeLoop) report(app storage.Appender, start time.Time, duration time.Duration, scraped, added, seriesAdded, overLimit, bytes int, scrapeErr error) (err error) {
 	sl.scraper.Report(start, duration, scrapeErr)
 
 	ts := timestamp.FromTime(start)
@@ -1916,6 +1937,9 @@ func (sl *scrapeLoop) report(app storage.Appender, start time.Time, duration tim
 		return
 	}
 	if err = sl.addReportSample(app, scrapeSeriesAddedMetricName, ts, float64(seriesAdded), b); err != nil {
+		return
+	}
+	if err = sl.addReportSample(app, scrapeSeriesOverLimitMetricName, ts, float64(overLimit), b); err != nil {
 		return
 	}
 	if sl.reportExtraMetrics {
@@ -1951,6 +1975,9 @@ func (sl *scrapeLoop) reportStale(app storage.Appender, start time.Time) (err er
 		return
 	}
 	if err = sl.addReportSample(app, scrapeSeriesAddedMetricName, ts, stale, b); err != nil {
+		return
+	}
+	if err = sl.addReportSample(app, scrapeSeriesOverLimitMetricName, ts, stale, b); err != nil {
 		return
 	}
 	if sl.reportExtraMetrics {
