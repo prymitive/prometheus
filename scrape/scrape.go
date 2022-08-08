@@ -697,9 +697,9 @@ func appender(app storage.Appender, sampleLimit, bucketLimit int, maxSchema int3
 		maxTime:  timestamp.FromTime(time.Now().Add(maxAheadTime)),
 	}
 
-	// The sampleLimit is applied after metrics are potentially dropped via relabeling.
+	// The limit is applied after metrics are potentially dropped via relabeling.
 	if sampleLimit > 0 {
-		app = &limitAppender{
+		app = &softLimitAppender{
 			Appender: app,
 			limit:    sampleLimit,
 		}
@@ -1420,7 +1420,7 @@ func (sl *scrapeLoop) scrapeAndReport(last, appendTime time.Time, errc chan<- er
 	// A failed scrape is the same as an empty scrape,
 	// we still call sl.append to trigger stale markers.
 	total, added, seriesAdded, overLimit, appErr = sl.append(app, b, contentType, appendTime)
-	// We ignore ErrHEADLimitReached error since it means HEAD is at capacity
+	// We ignore ErrCapacityExhaused error since it means HEAD is at capacity
 	// but still accepting appends to series already stored on HEAD
 	if appErr != nil && !errors.Is(appErr, storage.ErrCapacityExhaused) {
 		app.Rollback()
@@ -1590,7 +1590,7 @@ func (sl *scrapeLoop) append(app storage.Appender, b []byte, contentType string,
 	app = appender(app, sl.sampleLimit, sl.bucketLimit, sl.maxSchema)
 
 	defer func() {
-		if err != nil {
+		if err != nil && !errors.Is(err, storage.ErrCapacityExhaused) {
 			return
 		}
 		// Only perform cache cleaning if the scrape was not empty.

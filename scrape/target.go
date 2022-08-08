@@ -316,28 +316,6 @@ var (
 	errBucketLimit = errors.New("histogram bucket limit exceeded")
 )
 
-// limitAppender limits the number of total appended samples in a batch.
-type limitAppender struct {
-	storage.Appender
-
-	limit int
-	i     int
-}
-
-func (app *limitAppender) Append(ref storage.SeriesRef, lset labels.Labels, t int64, v float64) (storage.SeriesRef, error) {
-	if !value.IsStaleNaN(v) {
-		app.i++
-		if app.i > app.limit {
-			return 0, errSampleLimit
-		}
-	}
-	ref, err := app.Appender.Append(ref, lset, t, v)
-	if err != nil {
-		return 0, err
-	}
-	return ref, nil
-}
-
 type timeLimitAppender struct {
 	storage.Appender
 
@@ -582,4 +560,27 @@ func TargetsFromGroup(tg *targetgroup.Group, cfg *config.ScrapeConfig, noDefault
 		}
 	}
 	return targets, failures
+}
+
+// limitAppender limits the number of total appended samples in a batch to only series present in previous scrape.
+type softLimitAppender struct {
+	storage.Appender
+
+	limit int
+	i     int
+}
+
+func (app *softLimitAppender) Append(ref storage.SeriesRef, lset labels.Labels, t int64, v float64) (storage.SeriesRef, error) {
+	// Always append StaleNaN values.
+	if !value.IsStaleNaN(v) {
+		app.i++
+		if ref == 0 && app.i > app.limit {
+			return 0, storage.ErrCapacityExhaused
+		}
+	}
+	ref, err := app.Appender.Append(ref, lset, t, v)
+	if err != nil {
+		return 0, err
+	}
+	return ref, nil
 }

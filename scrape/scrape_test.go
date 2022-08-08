@@ -533,7 +533,7 @@ func TestScrapePoolAppender(t *testing.T) {
 
 	wrapped = appender(appl.appender(context.Background()), sampleLimit, 0, histogram.ExponentialSchemaMax)
 
-	sl, ok := wrapped.(*limitAppender)
+	sl, ok := wrapped.(*softLimitAppender)
 	require.True(t, ok, "Expected limitAppender but got %T", wrapped)
 
 	tl, ok = sl.Appender.(*timeLimitAppender)
@@ -547,7 +547,7 @@ func TestScrapePoolAppender(t *testing.T) {
 	bl, ok := wrapped.(*bucketLimitAppender)
 	require.True(t, ok, "Expected bucketLimitAppender but got %T", wrapped)
 
-	sl, ok = bl.Appender.(*limitAppender)
+	sl, ok = bl.Appender.(*softLimitAppender)
 	require.True(t, ok, "Expected limitAppender but got %T", bl)
 
 	tl, ok = sl.Appender.(*timeLimitAppender)
@@ -564,8 +564,8 @@ func TestScrapePoolAppender(t *testing.T) {
 	bl, ok = ml.Appender.(*bucketLimitAppender)
 	require.True(t, ok, "Expected bucketLimitAppender but got %T", wrapped)
 
-	sl, ok = bl.Appender.(*limitAppender)
-	require.True(t, ok, "Expected limitAppender but got %T", bl)
+	sl, ok = bl.Appender.(*softLimitAppender)
+	require.True(t, ok, "Expected softLimitAppender but got %T", bl)
 
 	tl, ok = sl.Appender.(*timeLimitAppender)
 	require.True(t, ok, "Expected timeLimitAppender but got %T", sl.Appender)
@@ -789,7 +789,7 @@ func TestScrapeLoopStop(t *testing.T) {
 		}
 	}
 	// All samples from the last scrape must be stale markers.
-	for _, s := range appender.resultFloats[len(appender.resultFloats)-5:] {
+	for _, s := range appender.resultFloats[len(appender.resultFloats)-6:] {
 		require.True(t, value.IsStaleNaN(s.f), "Appended last sample not as expected. Wanted: stale NaN Got: %x", math.Float64bits(s.f))
 	}
 }
@@ -1186,7 +1186,7 @@ func TestScrapeLoopRunCreatesStaleMarkersOnFailedScrape(t *testing.T) {
 		require.FailNow(t, "Scrape wasn't stopped.")
 	}
 
-	// 1 successfully scraped sample, 1 stale marker after first fail, 6 report samples for
+	// 1 successfully scraped sample, 1 stale marker after first fail, 7 report samples for
 	// each scrape successful or not.
 	require.Len(t, appender.resultFloats, 32, "Appended samples not as expected:\n%s", appender)
 	require.Equal(t, 42.0, appender.resultFloats[0].f, "Appended first sample not as expected")
@@ -1555,7 +1555,7 @@ func TestScrapeLoopAppendCacheEntryButErrNotFound(t *testing.T) {
 
 func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 	resApp := &collectResultAppender{}
-	app := &limitAppender{Appender: resApp, limit: 1}
+	app := &softLimitAppender{Appender: resApp, limit: 1}
 
 	sl := newBasicScrapeLoop(t, context.Background(), nil, func(ctx context.Context) storage.Appender { return app }, 0)
 	sl.sampleMutator = func(l labels.Labels) labels.Labels {
@@ -1576,13 +1576,13 @@ func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 	now := time.Now()
 	slApp := sl.appender(context.Background())
 	total, added, seriesAdded, overLimit, err := sl.append(app, []byte("metric_a 1\nmetric_b 1\nmetric_c 1\n"), "", now)
-	require.ErrorIs(t, err, errSampleLimit)
+	require.ErrorIs(t, err, storage.ErrCapacityExhaused)
 	require.NoError(t, slApp.Rollback())
 	sl.cache.iterDone(true)
 	require.Equal(t, 3, total)
 	require.Equal(t, 3, added)
 	require.Equal(t, 1, seriesAdded)
-	require.Equal(t, 0, overLimit)
+	require.Equal(t, 2, overLimit)
 
 	// Check that the Counter has been incremented a single time for the scrape,
 	// not multiple times for each sample.
@@ -1592,7 +1592,7 @@ func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 
 	value := metric.GetCounter().GetValue()
 	change := value - beforeMetricValue
-	require.Equal(t, 1.0, change, "Unexpected change of sample limit metric: %f", change)
+	require.Equal(t, 0.0, change, "Unexpected change of sample limit metric: %f", change)
 
 	// And verify that we got the samples that fit under the limit.
 	want := []floatSample{
@@ -1607,12 +1607,12 @@ func TestScrapeLoopAppendSampleLimit(t *testing.T) {
 	now = time.Now()
 	slApp = sl.appender(context.Background())
 	total, added, seriesAdded, overLimit, err = sl.append(slApp, []byte("metric_a 1\nmetric_b 1\nmetric_c{deleteme=\"yes\"} 1\nmetric_d 1\nmetric_e 1\nmetric_f 1\nmetric_g 1\nmetric_h{deleteme=\"yes\"} 1\nmetric_i{deleteme=\"yes\"} 1\n"), "", now)
-	require.ErrorIs(t, err, errSampleLimit)
+	require.ErrorIs(t, err, storage.ErrCapacityExhaused)
 	require.NoError(t, slApp.Rollback())
 	require.Equal(t, 9, total)
 	require.Equal(t, 6, added)
 	require.Equal(t, 0, seriesAdded)
-	require.Equal(t, 0, overLimit)
+	require.Equal(t, 6, overLimit)
 }
 
 func TestScrapeLoop_HistogramBucketLimit(t *testing.T) {
