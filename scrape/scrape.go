@@ -751,7 +751,7 @@ func appender(app storage.Appender, limit int) storage.Appender {
 
 	// The limit is applied after metrics are potentially dropped via relabeling.
 	if limit > 0 {
-		app = &limitAppender{
+		app = &softLimitAppender{
 			Appender: app,
 			limit:    limit,
 		}
