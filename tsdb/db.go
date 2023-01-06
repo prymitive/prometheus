@@ -906,6 +906,8 @@ func (db *DB) run() {
 			case db.compactc <- struct{}{}:
 			default:
 			}
+			// We attempt mmapping of head chunks regularly.
+			db.head.mmapHeadChunks()
 		case <-db.compactc:
 			db.metrics.compactionsTriggered.Inc()
 

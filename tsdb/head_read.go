@@ -175,12 +175,26 @@ func (h *headIndexReader) Series(ref storage.SeriesRef, builder *labels.ScratchB
 			Ref:     chunks.ChunkRef(chunks.NewHeadChunkRef(s.ref, s.headChunkID(i))),
 		})
 	}
-	if s.headChunk != nil && s.headChunk.OverlapsClosedInterval(h.mint, h.maxt) {
-		*chks = append(*chks, chunks.Meta{
-			MinTime: s.headChunk.minTime,
-			MaxTime: math.MaxInt64, // Set the head chunks as open (being appended to).
-			Ref:     chunks.ChunkRef(chunks.NewHeadChunkRef(s.ref, s.headChunkID(len(s.mmappedChunks)))),
-		})
+	if s.headChunk != nil {
+		var i int
+		var maxTime int64
+		chk := s.headChunk.last()
+		for chk != nil {
+			maxTime = chk.maxTime
+			if chk.next == nil {
+				// Set the head chunks as open (being appended to) for the first headChunk.
+				maxTime = math.MaxInt64
+			}
+			if chk.OverlapsClosedInterval(h.mint, h.maxt) {
+				*chks = append(*chks, chunks.Meta{
+					MinTime: chk.minTime,
+					MaxTime: maxTime,
+					Ref:     chunks.ChunkRef(chunks.NewHeadChunkRef(s.ref, s.headChunkID(len(s.mmappedChunks)+i))),
+				})
+			}
+			i++
+			chk = chk.next
+		}
 	}
 
 	return nil
@@ -315,32 +329,54 @@ func (h *headChunkReader) Chunk(meta chunks.Meta) (chunkenc.Chunk, error) {
 // If garbageCollect is true, it means that the returned *memChunk
 // (and not the chunkenc.Chunk inside it) can be garbage collected after its usage.
 func (s *memSeries) chunk(id chunks.HeadChunkID, chunkDiskMapper *chunks.ChunkDiskMapper, memChunkPool *sync.Pool) (chunk *memChunk, garbageCollect bool, err error) {
-	// ix represents the index of chunk in the s.mmappedChunks slice. The chunk id's are
-	// incremented by 1 when new chunk is created, hence (id - firstChunkID) gives the slice index.
-	// The max index for the s.mmappedChunks slice can be len(s.mmappedChunks)-1, hence if the ix
-	// is len(s.mmappedChunks), it represents the next chunk, which is the head chunk.
+	// ix represents the index of chunk in the s.mmappedChunks slice or s.headChunk list.
+	// The chunk id's are incremented by 1 when new chunk is created, hence (id - firstChunkID) gives the slice index.
+	// The max index for the s.mmappedChunks slice can be len(s.mmappedChunks)-1 so if it's bigger then
+	// it represents the index in s.headChunk linked list, which contains the current head chunk and all previous
+	// head chunks that are not yet mmapped.
+	//
+	// memSeries {
+	//   mmappedChunks: [t0, t1, t2]
+	//   headChunk: {t5} -> {t4} -> {t3}
+	// }
 	ix := int(id) - int(s.firstChunkID)
-	if ix < 0 || ix > len(s.mmappedChunks) {
+
+	var headChunksLen int
+	if s.headChunk != nil {
+		headChunksLen = s.headChunk.len()
+	}
+
+	if ix < 0 || ix > len(s.mmappedChunks)+headChunksLen-1 {
 		return nil, false, storage.ErrNotFound
 	}
-	if ix == len(s.mmappedChunks) {
-		if s.headChunk == nil {
-			return nil, false, errors.New("invalid head chunk")
+
+	if ix < len(s.mmappedChunks) {
+		chk, err := chunkDiskMapper.Chunk(s.mmappedChunks[ix].ref)
+		if err != nil {
+			if _, ok := err.(*chunks.CorruptionErr); ok {
+				panic(err)
+			}
+			return nil, false, err
 		}
-		return s.headChunk, false, nil
+		mc := memChunkPool.Get().(*memChunk)
+		mc.chunk = chk
+		mc.minTime = s.mmappedChunks[ix].minTime
+		mc.maxTime = s.mmappedChunks[ix].maxTime
+		return mc, true, nil
 	}
-	chk, err := chunkDiskMapper.Chunk(s.mmappedChunks[ix].ref)
-	if err != nil {
-		if _, ok := err.(*chunks.CorruptionErr); ok {
-			panic(err)
-		}
-		return nil, false, err
+
+	ix -= len(s.mmappedChunks)
+	// headChunk is a linked list where first element is the most recent one and the last one is the oldest.
+	// This order is reversed when compared with mmappedChunks, since mmappedChunks[0] is the oldest chunk,
+	// while headChunk.atOffset(0) would give us the most recent chunk.
+	// So when calling headChunk.atOffset() we need to reverse the value of ix.
+	chk := s.headChunk.atOffset(headChunksLen - ix - 1)
+	if chk == nil {
+		// This should never really happen and would mean that headChunksLen value is NOT equal
+		// to the length of the headChunk list.
+		return nil, false, storage.ErrNotFound
 	}
-	mc := memChunkPool.Get().(*memChunk)
-	mc.chunk = chk
-	mc.minTime = s.mmappedChunks[ix].minTime
-	mc.maxTime = s.mmappedChunks[ix].maxTime
-	return mc, true, nil
+	return chk, false, nil
 }
 
 // oooMergedChunk returns the requested chunk based on the given chunks.Meta
@@ -629,8 +665,18 @@ func (s *memSeries) iterator(id chunks.HeadChunkID, c chunkenc.Chunk, isoState *
 			}
 		}
 
+		ix -= len(s.mmappedChunks)
 		if s.headChunk != nil {
-			totalSamples += s.headChunk.chunk.NumSamples()
+			var j int
+			chk := s.headChunk.last()
+			for chk != nil {
+				totalSamples += chk.chunk.NumSamples()
+				if j < ix {
+					previousSamples += chk.chunk.NumSamples()
+				}
+				j++
+				chk = chk.next
+			}
 		}
 
 		// Removing the extra transactionIDs that are relevant for samples that

@@ -1423,7 +1423,7 @@ func (h *Head) loadChunkSnapshot() (int, int, map[chunks.HeadSeriesRef]*memSerie
 					continue
 				}
 				series.nextAt = csr.mc.maxTime // This will create a new chunk on append.
-				series.headChunk = csr.mc
+				series.headChunk = &memChunkList{memChunk: *csr.mc}
 				series.lastValue = csr.lastValue
 
 				app, err := series.headChunk.chunk.Appender()
