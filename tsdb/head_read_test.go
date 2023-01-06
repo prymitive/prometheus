@@ -183,6 +183,9 @@ func newTestChunk(numSamples int) chunkenc.Chunk {
 // TestMemSeries_chunk runs a series of tests on memSeries.chunk() calls.
 // It will simulate various conditions to ensure all code paths in that function are covered.
 func TestMemSeries_chunk(t *testing.T) {
+	const chunkRange = 100
+	const chunkStep = 5
+
 	type setupFn func(*memSeries, *chunks.ChunkDiskMapper)
 
 	type callOutput uint8
@@ -301,6 +304,138 @@ func TestMemSeries_chunk(t *testing.T) {
 			inputID:  3,
 			expected: outHeadChunk,
 		},
+		{
+			name: "call ix=0 on memSeries with 3 head chunks and no mmapped chunks",
+			setup: func(s *memSeries, cdm *chunks.ChunkDiskMapper) {
+				for i := chunkRange; i < 3*chunkRange; i += chunkStep {
+					ok, _ := s.append(int64(i), float64(i), 0, cdm, chunkRange)
+					require.True(t, ok, "sample append failed")
+				}
+				require.NotNil(t, s.headChunk, "head chunk is missing")
+				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
+				require.Equal(t, 0, len(s.mmappedChunks), "wrong number of mmapped chunks")
+			},
+			inputID:  0,
+			expected: outHeadChunk,
+		},
+		{
+			name: "call ix=1 on memSeries with 3 head chunks and no mmapped chunks",
+			setup: func(s *memSeries, cdm *chunks.ChunkDiskMapper) {
+				for i := chunkRange; i < 3*chunkRange; i += chunkStep {
+					ok, _ := s.append(int64(i), float64(i), 0, cdm, chunkRange)
+					require.True(t, ok, "sample append failed")
+				}
+				require.NotNil(t, s.headChunk, "head chunk is missing")
+				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
+				require.Equal(t, 0, len(s.mmappedChunks), "wrong number of mmapped chunks")
+			},
+			inputID:  1,
+			expected: outHeadChunk,
+		},
+		{
+			name: "call ix=10 on memSeries with 3 head chunks and no mmapped chunks",
+			setup: func(s *memSeries, cdm *chunks.ChunkDiskMapper) {
+				for i := chunkRange; i < 3*chunkRange; i += chunkStep {
+					ok, _ := s.append(int64(i), float64(i), 0, cdm, chunkRange)
+					require.True(t, ok, "sample append failed")
+				}
+				require.NotNil(t, s.headChunk, "head chunk is missing")
+				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
+				require.Equal(t, 0, len(s.mmappedChunks), "wrong number of mmapped chunks")
+			},
+			inputID:  10,
+			expected: outErr,
+		},
+		{
+			name:          "call ix=0 on memSeries with 3 head chunks and 3 mmapped chunks",
+			mmappedChunks: 3,
+			setup: func(s *memSeries, cdm *chunks.ChunkDiskMapper) {
+				for i := chunkRange * 4; i < 6*chunkRange; i += chunkStep {
+					ok, _ := s.append(int64(i), float64(i), 0, cdm, chunkRange)
+					require.True(t, ok, "sample append failed")
+				}
+				require.NotNil(t, s.headChunk, "head chunk is missing")
+				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
+				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+			},
+			inputID:  0,
+			expected: outMmappedChunk,
+		},
+		{
+			name:          "call ix=2 on memSeries with 3 head chunks and 3 mmapped chunks",
+			mmappedChunks: 3,
+			setup: func(s *memSeries, cdm *chunks.ChunkDiskMapper) {
+				for i := chunkRange * 4; i < 6*chunkRange; i += chunkStep {
+					ok, _ := s.append(int64(i), float64(i), 0, cdm, chunkRange)
+					require.True(t, ok, "sample append failed")
+				}
+				require.NotNil(t, s.headChunk, "head chunk is missing")
+				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
+				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+			},
+			inputID:  2,
+			expected: outMmappedChunk,
+		},
+		{
+			name:          "call ix=3 on memSeries with 3 head chunks and 3 mmapped chunks",
+			mmappedChunks: 3,
+			setup: func(s *memSeries, cdm *chunks.ChunkDiskMapper) {
+				for i := chunkRange * 4; i < 6*chunkRange; i += chunkStep {
+					ok, _ := s.append(int64(i), float64(i), 0, cdm, chunkRange)
+					require.True(t, ok, "sample append failed")
+				}
+				require.NotNil(t, s.headChunk, "head chunk is missing")
+				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
+				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+			},
+			inputID:  3,
+			expected: outHeadChunk,
+		},
+		{
+			name:          "call ix=5 on memSeries with 3 head chunks and 3 mmapped chunks",
+			mmappedChunks: 3,
+			setup: func(s *memSeries, cdm *chunks.ChunkDiskMapper) {
+				for i := chunkRange * 4; i < 6*chunkRange; i += chunkStep {
+					ok, _ := s.append(int64(i), float64(i), 0, cdm, chunkRange)
+					require.True(t, ok, "sample append failed")
+				}
+				require.NotNil(t, s.headChunk, "head chunk is missing")
+				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
+				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+			},
+			inputID:  5,
+			expected: outHeadChunk,
+		},
+		{
+			name:          "call ix=6 on memSeries with 3 head chunks and 3 mmapped chunks",
+			mmappedChunks: 3,
+			setup: func(s *memSeries, cdm *chunks.ChunkDiskMapper) {
+				for i := chunkRange * 4; i < 6*chunkRange; i += chunkStep {
+					ok, _ := s.append(int64(i), float64(i), 0, cdm, chunkRange)
+					require.True(t, ok, "sample append failed")
+				}
+				require.NotNil(t, s.headChunk, "head chunk is missing")
+				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
+				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+			},
+			inputID:  6,
+			expected: outErr,
+		},
+		{
+			name:          "call ix=10 on memSeries with 3 head chunks and 3 mmapped chunks",
+			mmappedChunks: 3,
+			setup: func(s *memSeries, cdm *chunks.ChunkDiskMapper) {
+				for i := chunkRange * 4; i < 6*chunkRange; i += chunkStep {
+					ok, _ := s.append(int64(i), float64(i), 0, cdm, chunkRange)
+					require.True(t, ok, "sample append failed")
+				}
+				require.NotNil(t, s.headChunk, "head chunk is missing")
+				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
+				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+			},
+			inputID:  10,
+			expected: outErr,
+		},
 	}
 
 	memChunkPool := &sync.Pool{
@@ -308,9 +443,6 @@ func TestMemSeries_chunk(t *testing.T) {
 			return &memChunk{}
 		},
 	}
-
-	const chunkRange = 100
-	const chunkStep = 5
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -324,15 +456,11 @@ func TestMemSeries_chunk(t *testing.T) {
 			series := newMemSeries(labels.EmptyLabels(), 1, true)
 
 			// Write enough samples to create headChunk and the requested number of mmapped chunks.
-			// Running this:
-			//   i := 0; i < tc.mmappedChunks*chunkRange
-			// would give us exactly the number of samples needed to fill all mmapped chunks.
-			// We have one extra iteration (i<= instead of i<) to write an extra sample that will trigger
-			// mmapping of last chunk and creation of new headChunk where it will be appended.
-			for i := 0; i <= tc.mmappedChunks*chunkRange; i += chunkStep {
+			for i := 0; i < (tc.mmappedChunks+1)*chunkRange; i += chunkStep {
 				ok, _ := series.append(int64(i), float64(i), 0, chunkDiskMapper, chunkRange)
 				require.True(t, ok, "sample append failed")
 			}
+			series.mmapHeadChunks(chunkDiskMapper)
 			require.NotNil(t, series.headChunk, "head chunk is missing")
 			require.Equal(t, tc.mmappedChunks, len(series.mmappedChunks), "wrong number of mmapped chunks")
 
@@ -345,9 +473,9 @@ func TestMemSeries_chunk(t *testing.T) {
 			case outHeadChunk:
 				require.NoError(t, err, "unexpected error")
 				require.False(t, gc, "expected a chunk with gc=false but got gc=%v", gc)
-				// there's only a single sample appended to headChunk
+				// all head chunks should be full and cover ..0 .95 range
 				require.Equal(t, int64(tc.inputID*chunkRange), chk.minTime, "wrong chunk minTime returned")
-				require.Equal(t, int64(tc.inputID*chunkRange), chk.maxTime, "wrong chunk maxTime returned")
+				require.Equal(t, int64((tc.inputID+1)*chunkRange-chunkStep), chk.maxTime, "wrong chunk maxTime returned")
 			case outMmappedChunk:
 				require.NoError(t, err, "unexpected error")
 				require.True(t, gc, "expected a chunk with gc=true but got gc=%v", gc)

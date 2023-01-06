@@ -1404,11 +1404,16 @@ func computeChunkEndTime(start, cur, max int64) int64 {
 func (s *memSeries) cutNewHeadChunk(
 	mint int64, e chunkenc.Encoding, chunkDiskMapper *chunks.ChunkDiskMapper, chunkRange int64,
 ) *memChunk {
-	s.mmapCurrentHeadChunk(chunkDiskMapper)
+	s.headChunk = &memChunkList{
+		memChunk: memChunk{
+			minTime: mint,
+			maxTime: math.MinInt64,
+		},
+		prev: s.headChunk,
+	}
 
-	s.headChunk = &memChunk{
-		minTime: mint,
-		maxTime: math.MinInt64,
+	if s.headChunk.prev != nil {
+		s.headChunk.prev.next = s.headChunk
 	}
 
 	if chunkenc.IsValidEncoding(e) {
@@ -1430,7 +1435,7 @@ func (s *memSeries) cutNewHeadChunk(
 		panic(err)
 	}
 	s.app = app
-	return s.headChunk
+	return &s.headChunk.memChunk
 }
 
 // cutNewOOOHeadChunk cuts a new OOO chunk and m-maps the old chunk.
@@ -1465,19 +1470,31 @@ func (s *memSeries) mmapCurrentOOOHeadChunk(chunkDiskMapper *chunks.ChunkDiskMap
 	return chunkRef
 }
 
-func (s *memSeries) mmapCurrentHeadChunk(chunkDiskMapper *chunks.ChunkDiskMapper) {
-	if s.headChunk == nil || s.headChunk.chunk.NumSamples() == 0 {
-		// There is no head chunk, so nothing to m-map here.
+func (s *memSeries) mmapHeadChunks(chunkDiskMapper *chunks.ChunkDiskMapper) {
+	if s.headChunk == nil || s.headChunk.prev == nil {
+		// There is none or only one head chunk, so nothing to m-map here.
 		return
 	}
 
-	chunkRef := chunkDiskMapper.WriteChunk(s.ref, s.headChunk.minTime, s.headChunk.maxTime, s.headChunk.chunk, handleChunkWriteError)
-	s.mmappedChunks = append(s.mmappedChunks, &mmappedChunk{
-		ref:        chunkRef,
-		numSamples: uint16(s.headChunk.chunk.NumSamples()),
-		minTime:    s.headChunk.minTime,
-		maxTime:    s.headChunk.maxTime,
-	})
+	// Write chunks starting from the oldest one and stop before we get to current s.headChunk.
+	// If we have this chain: s.headChunk{t4} -> t3 -> t2 -> t1 -> t0
+	// then we need to write chunks t3 to t0, but skip s.headChunk. To do that we write every chunk
+	// where next field points to something, once next field is nil we've reached out s.headChunk
+	// and we need to stop writing.
+	chk := s.headChunk.last()
+	for chk.next != nil {
+		chunkRef := chunkDiskMapper.WriteChunk(s.ref, chk.minTime, chk.maxTime, chk.chunk, handleChunkWriteError)
+		s.mmappedChunks = append(s.mmappedChunks, &mmappedChunk{
+			ref:        chunkRef,
+			numSamples: uint16(chk.chunk.NumSamples()),
+			minTime:    chk.minTime,
+			maxTime:    chk.maxTime,
+		})
+		chk = chk.next
+	}
+
+	// Once we've written out all chunks except s.headChunk we need to unlink these from s.headChunk.
+	s.headChunk.prev = nil
 }
 
 func handleChunkWriteError(err error) {
