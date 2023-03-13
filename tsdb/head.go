@@ -866,7 +866,7 @@ func (h *Head) loadMmappedChunks(refSeries map[chunks.HeadSeriesRef]*memSeries) 
 			numSamples: numSamples,
 		})
 		h.updateMinMaxTime(mint, maxt)
-		if ms.headChunk != nil && maxt >= ms.headChunk.minTime {
+		if ms.headChunk != nil && maxt >= ms.headChunk.chunk.minTime {
 			// The head chunk was completed and was m-mapped after taking the snapshot.
 			// Hence remove this chunk.
 			ms.nextAt = 0
@@ -1921,8 +1921,13 @@ type memSeries struct {
 	//
 	// pN is the pointer to the mmappedChunk referered to by HeadChunkID=N
 	mmappedChunks []*mmappedChunk
-	headChunk     *memChunkList      // Most recent chunk in memory that's still being built or waiting to be mmapped.
-	firstChunkID  chunks.HeadChunkID // HeadChunkID for mmappedChunks[0]
+
+	// Most recent chunks in memory that are still being built or waiting to be mmapped.
+	// This is a linked list, headChunk points to the most recent chunk, headChunk.prev points
+	// to previous chunk and so on.
+	headChunk *memChunkList[memChunk]
+
+	firstChunkID chunks.HeadChunkID // HeadChunkID for mmappedChunks[0]
 
 	ooo *memSeriesOOOFields
 
@@ -1973,7 +1978,7 @@ func (s *memSeries) minTime() int64 {
 		return s.mmappedChunks[0].minTime
 	}
 	if s.headChunk != nil {
-		return s.headChunk.last().minTime
+		return s.headChunk.last().chunk.minTime
 	}
 	return math.MinInt64
 }
@@ -1981,7 +1986,7 @@ func (s *memSeries) minTime() int64 {
 func (s *memSeries) maxTime() int64 {
 	// The highest timestamps will always be in the regular (non-OOO) chunks, even if OOO is enabled.
 	if s.headChunk != nil {
-		return s.headChunk.maxTime
+		return s.headChunk.chunk.maxTime
 	}
 	if len(s.mmappedChunks) > 0 {
 		return s.mmappedChunks[len(s.mmappedChunks)-1].maxTime
@@ -1994,24 +1999,24 @@ func (s *memSeries) maxTime() int64 {
 // Chunk IDs remain unchanged.
 func (s *memSeries) truncateChunksBefore(mint int64, minOOOMmapRef chunks.ChunkDiskMapperRef) int {
 	var removedHead int
-	chk := s.headChunk
-	for chk != nil {
-
-		if chk.maxTime < mint {
-			// If any head chunk is truncated, we can truncate all mmapped chunks.
-			removedHead = chk.len() + len(s.mmappedChunks)
-			s.firstChunkID += chunks.HeadChunkID(removedHead)
-			if chk.next == nil {
-				// this is the first chunk on the list so we need to clear everything on headChunk
-				s.headChunk = nil
-			} else {
-				// this is Nth element on the list, we need to detach it from the list
-				chk.next.prev = nil
+	if s.headChunk != nil {
+		elems := s.headChunk.toSlice()
+		for i, elem := range elems {
+			if elem.chunk.maxTime < mint {
+				// If any head chunk is truncated, we can truncate all mmapped chunks.
+				removedHead = elem.len() + len(s.mmappedChunks)
+				s.firstChunkID += chunks.HeadChunkID(removedHead)
+				if i == 0 {
+					// this is the first chunk on the list so we need to clear everything on headChunk
+					s.headChunk = nil
+				} else if i > 0 {
+					// this is NOT the first chunk, unlink it from next chunk
+					elems[i-1].prev = nil
+				}
+				s.mmappedChunks = nil
+				break
 			}
-			s.mmappedChunks = nil
-			break
 		}
-		chk = chk.prev
 	}
 
 	var removedMmap int
@@ -2058,7 +2063,7 @@ func (s *memSeries) head() *memChunk {
 	if s.headChunk == nil {
 		return nil
 	}
-	return &s.headChunk.memChunk
+	return &s.headChunk.chunk
 }
 
 type memChunk struct {
@@ -2066,47 +2071,72 @@ type memChunk struct {
 	minTime, maxTime int64
 }
 
-type memChunkList struct {
-	memChunk
-	prev *memChunkList // older element, nil for the last (oldest) element on the list
-	next *memChunkList // newer element, nil for the first (most recent) element on the list
-}
-
-// atOffset returns memChunk list element at given offset, where 0 is the current element it was called on
-func (mcc *memChunkList) atOffset(offset int) *memChunk {
-	chk := mcc
-	for {
-		if offset == 0 {
-			return &chk.memChunk
-		}
-		if chk.prev == nil {
-			// This shouldn't really ever happen. If we're here it means that memChunkList.len() gave us
-			// a higher chunk count then we have in reality.
-			return nil
-		}
-		offset--
-		chk = chk.prev
-	}
+type memChunkList[T any] struct {
+	chunk T
+	prev  *memChunkList[T]
 }
 
 // len returns the length of memChunk list, including the element it was called on
-func (mcc *memChunkList) len() (count int) {
-	count++
-	chk := mcc
-	for chk.prev != nil {
+func (mcl *memChunkList[T]) len() (count int) {
+	elem := mcl
+	for elem != nil {
 		count++
-		chk = chk.prev
+		elem = elem.prev
 	}
 	return count
 }
 
-// len returns the last element on memChunk list, which should be the oldest memChunk
-func (mcc *memChunkList) last() *memChunkList {
-	chk := mcc
-	for chk.prev != nil {
-		chk = chk.prev
+func (mcl *memChunkList[T]) atOffset(offset int) *memChunkList[T] {
+	if offset == 0 {
+		return mcl
 	}
-	return chk
+	var i int
+	elem := mcl
+	for elem != nil {
+		if i == offset {
+			return elem
+		}
+		i++
+		elem = elem.prev
+	}
+	return elem
+}
+
+func (mcl *memChunkList[T]) last() *memChunkList[T] {
+	elem := mcl
+	for elem.prev != nil {
+		elem = elem.prev
+	}
+	return elem
+}
+
+func (mcl *memChunkList[T]) toSlice() []*memChunkList[T] {
+	elems := make([]*memChunkList[T], 0, mcl.len())
+	elem := mcl
+	for elem != nil {
+		elems = append(elems, elem)
+		elem = elem.prev
+	}
+	return elems
+}
+
+func (mcl *memChunkList[T]) toReversedSlice() []*memChunkList[T] {
+	i := mcl.len()
+	elems := make([]*memChunkList[T], i)
+	elem := mcl
+	for elem != nil {
+		i--
+		elems[i] = elem
+		elem = elem.prev
+	}
+	return elems
+}
+
+func prependToChunkList[T any](mcl *memChunkList[T], chk T) *memChunkList[T] {
+	return &memChunkList[T]{
+		chunk: chk,
+		prev:  mcl,
+	}
 }
 
 type oooHeadChunk struct {

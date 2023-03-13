@@ -1205,7 +1205,7 @@ func (s *memSeries) appendHistogram(t int64, h *histogram.Histogram, appendID ui
 	}
 
 	if chunkCreated {
-		hc := s.headChunk.chunk.(*chunkenc.HistogramChunk)
+		hc := s.headChunk.chunk.chunk.(*chunkenc.HistogramChunk)
 		header := chunkenc.UnknownCounterReset
 		switch {
 		case gauge:
@@ -1298,7 +1298,7 @@ func (s *memSeries) appendFloatHistogram(t int64, fh *histogram.FloatHistogram, 
 	}
 
 	if chunkCreated {
-		hc := s.headChunk.chunk.(*chunkenc.FloatHistogramChunk)
+		hc := s.headChunk.chunk.chunk.(*chunkenc.FloatHistogramChunk)
 		header := chunkenc.UnknownCounterReset
 		switch {
 		case gauge:
@@ -1404,38 +1404,31 @@ func computeChunkEndTime(start, cur, max int64) int64 {
 func (s *memSeries) cutNewHeadChunk(
 	mint int64, e chunkenc.Encoding, chunkDiskMapper *chunks.ChunkDiskMapper, chunkRange int64,
 ) *memChunk {
-	s.headChunk = &memChunkList{
-		memChunk: memChunk{
-			minTime: mint,
-			maxTime: math.MinInt64,
-		},
-		prev: s.headChunk,
-	}
-
-	if s.headChunk.prev != nil {
-		s.headChunk.prev.next = s.headChunk
-	}
+	s.headChunk = prependToChunkList(s.headChunk, memChunk{
+		minTime: mint,
+		maxTime: math.MinInt64,
+	})
 
 	if chunkenc.IsValidEncoding(e) {
 		var err error
-		s.headChunk.chunk, err = chunkenc.NewEmptyChunk(e)
+		s.headChunk.chunk.chunk, err = chunkenc.NewEmptyChunk(e)
 		if err != nil {
 			panic(err) // This should never happen.
 		}
 	} else {
-		s.headChunk.chunk = chunkenc.NewXORChunk()
+		s.headChunk.chunk.chunk = chunkenc.NewXORChunk()
 	}
 
 	// Set upper bound on when the next chunk must be started. An earlier timestamp
 	// may be chosen dynamically at a later point.
 	s.nextAt = rangeForTimestamp(mint, chunkRange)
 
-	app, err := s.headChunk.chunk.Appender()
+	app, err := s.headChunk.chunk.chunk.Appender()
 	if err != nil {
 		panic(err)
 	}
 	s.app = app
-	return &s.headChunk.memChunk
+	return &s.headChunk.chunk
 }
 
 // cutNewOOOHeadChunk cuts a new OOO chunk and m-maps the old chunk.
@@ -1481,17 +1474,16 @@ func (s *memSeries) mmapHeadChunks(chunkDiskMapper *chunks.ChunkDiskMapper) (cou
 	// then we need to write chunks t3 to t0, but skip s.headChunk. To do that we write every chunk
 	// where next field points to something, once next field is nil we've reached out s.headChunk
 	// and we need to stop writing.
-	chk := s.headChunk.last()
-	for chk.next != nil {
-		chunkRef := chunkDiskMapper.WriteChunk(s.ref, chk.minTime, chk.maxTime, chk.chunk, handleChunkWriteError)
+	elems := s.headChunk.toReversedSlice()
+	for _, elem := range elems[:len(elems)-1] {
+		chunkRef := chunkDiskMapper.WriteChunk(s.ref, elem.chunk.minTime, elem.chunk.maxTime, elem.chunk.chunk, handleChunkWriteError)
 		s.mmappedChunks = append(s.mmappedChunks, &mmappedChunk{
 			ref:        chunkRef,
-			numSamples: uint16(chk.chunk.NumSamples()),
-			minTime:    chk.minTime,
-			maxTime:    chk.maxTime,
+			numSamples: uint16(elem.chunk.chunk.NumSamples()),
+			minTime:    elem.chunk.minTime,
+			maxTime:    elem.chunk.maxTime,
 		})
 		count++
-		chk = chk.next
 	}
 
 	// Once we've written out all chunks except s.headChunk we need to unlink these from s.headChunk.

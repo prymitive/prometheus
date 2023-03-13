@@ -176,24 +176,21 @@ func (h *headIndexReader) Series(ref storage.SeriesRef, builder *labels.ScratchB
 		})
 	}
 	if s.headChunk != nil {
-		var i int
 		var maxTime int64
-		chk := s.headChunk.last()
-		for chk != nil {
-			maxTime = chk.maxTime
-			if chk.next == nil {
+		elems := s.headChunk.toReversedSlice()
+		for i, elem := range elems {
+			maxTime = elem.chunk.maxTime
+			if i == len(elems)-1 {
 				// Set the head chunks as open (being appended to) for the first headChunk.
 				maxTime = math.MaxInt64
 			}
-			if chk.OverlapsClosedInterval(h.mint, h.maxt) {
+			if elem.chunk.OverlapsClosedInterval(h.mint, h.maxt) {
 				*chks = append(*chks, chunks.Meta{
-					MinTime: chk.minTime,
+					MinTime: elem.chunk.minTime,
 					MaxTime: maxTime,
 					Ref:     chunks.ChunkRef(chunks.NewHeadChunkRef(s.ref, s.headChunkID(len(s.mmappedChunks)+i))),
 				})
 			}
-			i++
-			chk = chk.next
 		}
 	}
 
@@ -370,13 +367,13 @@ func (s *memSeries) chunk(id chunks.HeadChunkID, chunkDiskMapper *chunks.ChunkDi
 	// This order is reversed when compared with mmappedChunks, since mmappedChunks[0] is the oldest chunk,
 	// while headChunk.atOffset(0) would give us the most recent chunk.
 	// So when calling headChunk.atOffset() we need to reverse the value of ix.
-	chk := s.headChunk.atOffset(headChunksLen - ix - 1)
-	if chk == nil {
+	elem := s.headChunk.atOffset(headChunksLen - ix - 1)
+	if elem == nil {
 		// This should never really happen and would mean that headChunksLen value is NOT equal
 		// to the length of the headChunk list.
 		return nil, false, storage.ErrNotFound
 	}
-	return chk, false, nil
+	return &elem.chunk, false, nil
 }
 
 // oooMergedChunk returns the requested chunk based on the given chunks.Meta
@@ -667,15 +664,12 @@ func (s *memSeries) iterator(id chunks.HeadChunkID, c chunkenc.Chunk, isoState *
 
 		ix -= len(s.mmappedChunks)
 		if s.headChunk != nil {
-			var j int
-			chk := s.headChunk.last()
-			for chk != nil {
-				totalSamples += chk.chunk.NumSamples()
+			elems := s.headChunk.toReversedSlice()
+			for j, elem := range elems {
+				totalSamples += elem.chunk.chunk.NumSamples()
 				if j < ix {
-					previousSamples += chk.chunk.NumSamples()
+					previousSamples += elem.chunk.chunk.NumSamples()
 				}
-				j++
-				chk = chk.next
 			}
 		}
 
