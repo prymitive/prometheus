@@ -991,10 +991,10 @@ func (s *memSeries) encodeToSnapshotRecord(b []byte) []byte {
 		buf.PutUvarint(0)
 	} else {
 		buf.PutUvarint(1)
-		buf.PutBE64int64(s.headChunk.minTime)
-		buf.PutBE64int64(s.headChunk.maxTime)
-		buf.PutByte(byte(s.headChunk.chunk.Encoding()))
-		buf.PutUvarintBytes(s.headChunk.chunk.Bytes())
+		buf.PutBE64int64(s.headChunk.chunk.minTime)
+		buf.PutBE64int64(s.headChunk.chunk.maxTime)
+		buf.PutByte(byte(s.headChunk.chunk.chunk.Encoding()))
+		buf.PutUvarintBytes(s.headChunk.chunk.chunk.Bytes())
 		// Backwards compatibility for old sampleBuf which had last 4 samples.
 		for i := 0; i < 3; i++ {
 			buf.PutBE64int64(0)
@@ -1423,10 +1423,10 @@ func (h *Head) loadChunkSnapshot() (int, int, map[chunks.HeadSeriesRef]*memSerie
 					continue
 				}
 				series.nextAt = csr.mc.maxTime // This will create a new chunk on append.
-				series.headChunk = &memChunkList{memChunk: *csr.mc}
+				series.headChunk = &memChunkList[memChunk]{chunk: *csr.mc}
 				series.lastValue = csr.lastValue
 
-				app, err := series.headChunk.chunk.Appender()
+				app, err := series.headChunk.chunk.chunk.Appender()
 				if err != nil {
 					errChan <- err
 					return
