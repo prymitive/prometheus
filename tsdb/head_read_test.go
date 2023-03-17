@@ -313,7 +313,7 @@ func TestMemSeries_chunk(t *testing.T) {
 				}
 				require.NotNil(t, s.headChunk, "head chunk is missing")
 				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
-				require.Equal(t, 0, len(s.mmappedChunks), "wrong number of mmapped chunks")
+				require.Equal(t, 0, s.mmappedChunks.len(), "wrong number of mmapped chunks")
 			},
 			inputID:  0,
 			expected: outHeadChunk,
@@ -327,7 +327,7 @@ func TestMemSeries_chunk(t *testing.T) {
 				}
 				require.NotNil(t, s.headChunk, "head chunk is missing")
 				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
-				require.Equal(t, 0, len(s.mmappedChunks), "wrong number of mmapped chunks")
+				require.Equal(t, 0, s.mmappedChunks.len(), "wrong number of mmapped chunks")
 			},
 			inputID:  1,
 			expected: outHeadChunk,
@@ -341,7 +341,7 @@ func TestMemSeries_chunk(t *testing.T) {
 				}
 				require.NotNil(t, s.headChunk, "head chunk is missing")
 				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
-				require.Equal(t, 0, len(s.mmappedChunks), "wrong number of mmapped chunks")
+				require.Equal(t, 0, s.mmappedChunks.len(), "wrong number of mmapped chunks")
 			},
 			inputID:  10,
 			expected: outErr,
@@ -356,7 +356,7 @@ func TestMemSeries_chunk(t *testing.T) {
 				}
 				require.NotNil(t, s.headChunk, "head chunk is missing")
 				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
-				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+				require.Equal(t, 3, s.mmappedChunks.len(), "wrong number of mmapped chunks")
 			},
 			inputID:  0,
 			expected: outMmappedChunk,
@@ -371,7 +371,7 @@ func TestMemSeries_chunk(t *testing.T) {
 				}
 				require.NotNil(t, s.headChunk, "head chunk is missing")
 				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
-				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+				require.Equal(t, 3, s.mmappedChunks.len(), "wrong number of mmapped chunks")
 			},
 			inputID:  2,
 			expected: outMmappedChunk,
@@ -386,7 +386,7 @@ func TestMemSeries_chunk(t *testing.T) {
 				}
 				require.NotNil(t, s.headChunk, "head chunk is missing")
 				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
-				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+				require.Equal(t, 3, s.mmappedChunks.len(), "wrong number of mmapped chunks")
 			},
 			inputID:  3,
 			expected: outHeadChunk,
@@ -401,7 +401,7 @@ func TestMemSeries_chunk(t *testing.T) {
 				}
 				require.NotNil(t, s.headChunk, "head chunk is missing")
 				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
-				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+				require.Equal(t, 3, s.mmappedChunks.len(), "wrong number of mmapped chunks")
 			},
 			inputID:  5,
 			expected: outHeadChunk,
@@ -416,7 +416,7 @@ func TestMemSeries_chunk(t *testing.T) {
 				}
 				require.NotNil(t, s.headChunk, "head chunk is missing")
 				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
-				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+				require.Equal(t, 3, s.mmappedChunks.len(), "wrong number of mmapped chunks")
 			},
 			inputID:  6,
 			expected: outErr,
@@ -431,7 +431,7 @@ func TestMemSeries_chunk(t *testing.T) {
 				}
 				require.NotNil(t, s.headChunk, "head chunk is missing")
 				require.Equal(t, 3, s.headChunk.len(), "wrong number of head chunks")
-				require.Equal(t, 3, len(s.mmappedChunks), "wrong number of mmapped chunks")
+				require.Equal(t, 3, s.mmappedChunks.len(), "wrong number of mmapped chunks")
 			},
 			inputID:  10,
 			expected: outErr,
@@ -462,7 +462,7 @@ func TestMemSeries_chunk(t *testing.T) {
 			}
 			series.mmapHeadChunks(chunkDiskMapper)
 			require.NotNil(t, series.headChunk, "head chunk is missing")
-			require.Equal(t, tc.mmappedChunks, len(series.mmappedChunks), "wrong number of mmapped chunks")
+			require.Equal(t, tc.mmappedChunks, series.mmappedChunks.len(), "wrong number of mmapped chunks")
 
 			if tc.setup != nil {
 				tc.setup(series, chunkDiskMapper)
@@ -485,6 +485,17 @@ func TestMemSeries_chunk(t *testing.T) {
 			case outErr:
 				require.Nil(t, chk, "got a non-nil chunk reference returned with an error")
 				require.Error(t, err)
+			}
+
+			if series.headChunk != nil {
+				lastHead := series.headChunk.last()
+				require.NotNil(t, lastHead, "headChunk.last() but headChunk is non-nil")
+				require.Nil(t, lastHead.prev, "headChunk.last() must be nil")
+			}
+			if series.mmappedChunks != nil {
+				lastMmap := series.mmappedChunks.last()
+				require.NotNil(t, lastMmap, "mmappedChunks.last() but mmappedChunks is non-nil")
+				require.Nil(t, lastMmap.prev, "mmappedChunks.last() must be nil")
 			}
 		})
 	}

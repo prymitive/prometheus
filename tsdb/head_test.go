@@ -672,21 +672,15 @@ func TestHead_Truncate(t *testing.T) {
 	s3, _, _ := h.getOrCreate(3, labels.FromStrings("a", "1", "b", "2"))
 	s4, _, _ := h.getOrCreate(4, labels.FromStrings("a", "2", "b", "2", "c", "1"))
 
-	s1.mmappedChunks = []*mmappedChunk{
-		{minTime: 0, maxTime: 999},
-		{minTime: 1000, maxTime: 1999},
-		{minTime: 2000, maxTime: 2999},
-	}
-	s2.mmappedChunks = []*mmappedChunk{
-		{minTime: 1000, maxTime: 1999},
-		{minTime: 2000, maxTime: 2999},
-		{minTime: 3000, maxTime: 3999},
-	}
-	s3.mmappedChunks = []*mmappedChunk{
-		{minTime: 0, maxTime: 999},
-		{minTime: 1000, maxTime: 1999},
-	}
-	s4.mmappedChunks = []*mmappedChunk{}
+	s1.mmappedChunks = appendToChunkList(s1.mmappedChunks, &mmappedChunk{minTime: 0, maxTime: 999})
+	s1.mmappedChunks = appendToChunkList(s1.mmappedChunks, &mmappedChunk{minTime: 1000, maxTime: 1999})
+	s1.mmappedChunks = appendToChunkList(s1.mmappedChunks, &mmappedChunk{minTime: 2000, maxTime: 2999})
+	s2.mmappedChunks = appendToChunkList(s2.mmappedChunks, &mmappedChunk{minTime: 1000, maxTime: 1999})
+	s2.mmappedChunks = appendToChunkList(s2.mmappedChunks, &mmappedChunk{minTime: 2000, maxTime: 2999})
+	s2.mmappedChunks = appendToChunkList(s2.mmappedChunks, &mmappedChunk{minTime: 3000, maxTime: 3999})
+	s3.mmappedChunks = appendToChunkList(s3.mmappedChunks, &mmappedChunk{minTime: 0, maxTime: 999})
+	s3.mmappedChunks = appendToChunkList(s3.mmappedChunks, &mmappedChunk{minTime: 1000, maxTime: 1999})
+	s4.mmappedChunks = nil
 
 	// Truncation need not be aligned.
 	require.NoError(t, h.Truncate(1))
@@ -773,7 +767,7 @@ func TestMemSeries_truncateChunks(t *testing.T) {
 
 	// Check that truncate removes half of the chunks and afterwards
 	// that the ID of the last chunk still gives us the same chunk afterwards.
-	countBefore := len(s.mmappedChunks) + 1 // +1 for the head chunk.
+	countBefore := s.mmappedChunks.len() + 1 // +1 for the head chunk.
 	lastID := s.headChunkID(countBefore - 1)
 	lastChunk, _, err := s.chunk(lastID, chunkDiskMapper, &memChunkPool)
 	require.NoError(t, err)
@@ -785,10 +779,10 @@ func TestMemSeries_truncateChunks(t *testing.T) {
 
 	s.truncateChunksBefore(2000, 0)
 
-	require.Equal(t, int64(2000), s.mmappedChunks[0].minTime)
+	require.Equal(t, int64(2000), s.mmappedChunks.chunk.minTime)
 	_, _, err = s.chunk(0, chunkDiskMapper, &memChunkPool)
 	require.Equal(t, storage.ErrNotFound, err, "first chunks not gone")
-	require.Equal(t, countBefore/2, len(s.mmappedChunks)+1) // +1 for the head chunk.
+	require.Equal(t, countBefore/2, s.mmappedChunks.len()+1) // +1 for the head chunk.
 	chk, _, err = s.chunk(lastID, chunkDiskMapper, &memChunkPool)
 	require.NoError(t, err)
 	require.Equal(t, lastChunk, chk)
@@ -931,12 +925,12 @@ func TestMemSeries_truncateChunks_scenarios(t *testing.T) {
 			} else {
 				require.Nil(t, series.headChunk, "head chunk is present")
 			}
-			require.Equal(t, tc.mmappedChunks, len(series.mmappedChunks), "wrong number of mmapped chunks")
+			require.Equal(t, tc.mmappedChunks, series.mmappedChunks.len(), "wrong number of mmapped chunks")
 
 			truncated := series.truncateChunksBefore(tc.truncateBefore, 0)
 			require.Equal(t, tc.expectedTruncated, truncated, "wrong number of truncated chunks returned")
 
-			require.Equal(t, tc.expectedMmap, len(series.mmappedChunks), "wrong number of mmappedChunks after truncation")
+			require.Equal(t, tc.expectedMmap, series.mmappedChunks.len(), "wrong number of mmappedChunks after truncation")
 
 			if tc.expectedHead > 0 {
 				require.NotNil(t, series.headChunk, "headChunk should is nil after truncation")
@@ -946,13 +940,24 @@ func TestMemSeries_truncateChunks_scenarios(t *testing.T) {
 				require.Nil(t, series.headChunk, "headChunk should is non-nil after truncation")
 			}
 
-			if series.headChunk != nil || len(series.mmappedChunks) > 0 {
+			if series.headChunk != nil || series.mmappedChunks.len() > 0 {
 				require.GreaterOrEqual(t, series.maxTime(), tc.truncateBefore, "wrong value of series.maxTime() after truncation")
 			} else {
 				require.Equal(t, int64(math.MinInt64), series.maxTime(), "wrong value of series.maxTime() after truncation")
 			}
 
 			require.Equal(t, tc.expectedFirstChunkID, series.firstChunkID, "wrong firstChunkID after truncation")
+
+			if series.headChunk != nil {
+				lastHead := series.headChunk.last()
+				require.NotNil(t, lastHead, "headChunk.last() but headChunk is non-nil")
+				require.Nil(t, lastHead.prev, "headChunk.last() must be nil")
+			}
+			if series.mmappedChunks != nil {
+				lastMmap := series.mmappedChunks.last()
+				require.NotNil(t, lastMmap, "mmappedChunks.last() but mmappedChunks is non-nil")
+				require.Nil(t, lastMmap.prev, "mmappedChunks.last() must be nil")
+			}
 		})
 	}
 }
@@ -1480,9 +1485,9 @@ func TestMemSeries_append(t *testing.T) {
 	require.False(t, chunkCreated, "second sample should use same chunk")
 	s.mmapHeadChunks(chunkDiskMapper)
 
-	require.Equal(t, 1, len(s.mmappedChunks), "there should be only 1 mmapped chunk")
-	require.Equal(t, int64(998), s.mmappedChunks[0].minTime, "wrong chunk range")
-	require.Equal(t, int64(999), s.mmappedChunks[0].maxTime, "wrong chunk range")
+	require.Equal(t, 1, s.mmappedChunks.len(), "there should be only 1 mmapped chunk")
+	require.Equal(t, int64(998), s.mmappedChunks.chunk.minTime, "wrong chunk range")
+	require.Equal(t, int64(999), s.mmappedChunks.chunk.maxTime, "wrong chunk range")
 	require.Equal(t, int64(1000), s.headChunk.chunk.minTime, "wrong chunk range")
 	require.Equal(t, int64(1001), s.headChunk.chunk.maxTime, "wrong chunk range")
 
@@ -1494,11 +1499,11 @@ func TestMemSeries_append(t *testing.T) {
 	}
 	s.mmapHeadChunks(chunkDiskMapper)
 
-	require.Greater(t, len(s.mmappedChunks)+1, 7, "expected intermediate chunks")
+	require.Greater(t, s.mmappedChunks.len()+1, 7, "expected intermediate chunks")
 
 	// All chunks but the first and last should now be moderately full.
-	for i, c := range s.mmappedChunks[1:] {
-		chk, err := chunkDiskMapper.Chunk(c.ref)
+	for i, c := range s.mmappedChunks.toSlice()[1:] {
+		chk, err := chunkDiskMapper.Chunk(c.chunk.ref)
 		require.NoError(t, err)
 		require.Greater(t, chk.NumSamples(), 100, "unexpected small chunk %d of length %d", i, chk.NumSamples())
 	}
@@ -1543,9 +1548,9 @@ func TestMemSeries_appendHistogram(t *testing.T) {
 	require.False(t, chunkCreated, "second sample should use same chunk")
 	s.mmapHeadChunks(chunkDiskMapper)
 
-	require.Equal(t, 1, len(s.mmappedChunks), "there should be only 1 mmapped chunk")
-	require.Equal(t, int64(998), s.mmappedChunks[0].minTime, "wrong chunk range")
-	require.Equal(t, int64(999), s.mmappedChunks[0].maxTime, "wrong chunk range")
+	require.Equal(t, 1, s.mmappedChunks.len(), "there should be only 1 mmapped chunk")
+	require.Equal(t, int64(998), s.mmappedChunks.chunk.minTime, "wrong chunk range")
+	require.Equal(t, int64(999), s.mmappedChunks.chunk.maxTime, "wrong chunk range")
 	require.Equal(t, int64(1000), s.headChunk.chunk.minTime, "wrong chunk range")
 	require.Equal(t, int64(1001), s.headChunk.chunk.maxTime, "wrong chunk range")
 
@@ -1554,9 +1559,9 @@ func TestMemSeries_appendHistogram(t *testing.T) {
 	require.False(t, chunkCreated, "third sample should trigger a re-encoded chunk")
 	s.mmapHeadChunks(chunkDiskMapper)
 
-	require.Equal(t, 1, len(s.mmappedChunks), "there should be only 1 mmapped chunk")
-	require.Equal(t, int64(998), s.mmappedChunks[0].minTime, "wrong chunk range")
-	require.Equal(t, int64(999), s.mmappedChunks[0].maxTime, "wrong chunk range")
+	require.Equal(t, 1, s.mmappedChunks.len(), "there should be only 1 mmapped chunk")
+	require.Equal(t, int64(998), s.mmappedChunks.chunk.minTime, "wrong chunk range")
+	require.Equal(t, int64(999), s.mmappedChunks.chunk.maxTime, "wrong chunk range")
 	require.Equal(t, int64(1000), s.headChunk.chunk.minTime, "wrong chunk range")
 	require.Equal(t, int64(1002), s.headChunk.chunk.maxTime, "wrong chunk range")
 }
@@ -1600,11 +1605,11 @@ func TestMemSeries_append_atVariableRate(t *testing.T) {
 	s.mmapHeadChunks(chunkDiskMapper)
 
 	var totalSamplesInChunks int
-	for i, c := range s.mmappedChunks {
-		totalSamplesInChunks += int(c.numSamples)
-		require.LessOrEqualf(t, c.numSamples, uint16(2*samplesPerChunk), "mmapped chunk %d has more than %d samples", i, 2*samplesPerChunk)
+	for i, c := range s.mmappedChunks.toSlice() {
+		totalSamplesInChunks += int(c.chunk.numSamples)
+		require.LessOrEqualf(t, c.chunk.numSamples, uint16(2*samplesPerChunk), "mmapped chunk %d has more than %d samples", i, 2*samplesPerChunk)
 	}
-	require.Equal(t, totalAppendedSamples, totalSamplesInChunks, "wrong number of samples in %d mmapped chunks", len(s.mmappedChunks))
+	require.Equal(t, totalAppendedSamples, totalSamplesInChunks, "wrong number of samples in %d mmapped chunks", s.mmappedChunks.len())
 }
 
 func TestGCChunkAccess(t *testing.T) {
@@ -3176,10 +3181,12 @@ func TestHistogramInWALAndMmapChunk(t *testing.T) {
 	ms := head.series.getByHash(s1.Hash(), s1)
 	require.Len(t, ms.mmappedChunks, 11)
 	expMmapChunks := make([]*mmappedChunk, 0, 11)
-	for _, mmap := range ms.mmappedChunks {
-		require.Greater(t, mmap.numSamples, uint16(0))
-		cpy := *mmap
+	mmap := ms.mmappedChunks
+	for mmap != nil {
+		require.Greater(t, mmap.chunk.numSamples, uint16(0))
+		cpy := *mmap.chunk
 		expMmapChunks = append(expMmapChunks, &cpy)
+		mmap = mmap.prev
 	}
 	expHeadChunkSamples := ms.headChunk.chunk.chunk.NumSamples()
 	require.Greater(t, expHeadChunkSamples, 0)
@@ -3755,7 +3762,7 @@ func testHistogramStaleSampleHelper(t *testing.T, floatHistogram bool) {
 	require.NotNil(t, s)
 	require.NotNil(t, s.headChunk)
 	require.Equal(t, s.headChunk.len(), 1)
-	require.Equal(t, 0, len(s.mmappedChunks))
+	require.Equal(t, 0, s.mmappedChunks.len())
 	testQuery(1)
 
 	// Adding stale in different appender and continuing series after a stale sample.
@@ -3790,7 +3797,7 @@ func testHistogramStaleSampleHelper(t *testing.T, floatHistogram bool) {
 	require.NotNil(t, s)
 	require.NotNil(t, s.headChunk)
 	require.Equal(t, s.headChunk.len(), 1)
-	require.Equal(t, 1, len(s.mmappedChunks))
+	require.Equal(t, 1, s.mmappedChunks.len())
 	testQuery(2)
 }
 
@@ -3827,8 +3834,8 @@ func TestHistogramCounterResetHeader(t *testing.T) {
 				ms.mmapHeadChunks(head.chunkDiskMapper)
 				require.Len(t, ms.mmappedChunks, len(expHeaders)-1) // One is the head chunk.
 
-				for i, mmapChunk := range ms.mmappedChunks {
-					chk, err := head.chunkDiskMapper.Chunk(mmapChunk.ref)
+				for i, mmapChunk := range ms.mmappedChunks.toSlice() {
+					chk, err := head.chunkDiskMapper.Chunk(mmapChunk.chunk.ref)
 					require.NoError(t, err)
 					if floatHisto {
 						require.Equal(t, expHeaders[i], chk.(*chunkenc.FloatHistogramChunk).GetCounterResetHeader())
@@ -4372,8 +4379,10 @@ func TestHeadInit_DiscardChunksWithUnsupportedEncoding(t *testing.T) {
 	require.NotNil(t, series, "should return the series we created above")
 
 	series.mmapHeadChunks(h.chunkDiskMapper)
-	expChunks := make([]*mmappedChunk, len(series.mmappedChunks))
-	copy(expChunks, series.mmappedChunks)
+	expChunks := make([]*mmappedChunk, 0, series.mmappedChunks.len())
+	for _, mc := range series.mmappedChunks.toSlice() {
+		expChunks = append(expChunks, mc.chunk)
+	}
 
 	require.NoError(t, h.Close())
 
@@ -4855,8 +4864,8 @@ func TestGaugeHistogramWALAndChunkHeader(t *testing.T) {
 			chunkenc.UnknownCounterReset,
 			chunkenc.GaugeType,
 		}
-		for i, mmapChunk := range ms.mmappedChunks {
-			chk, err := head.chunkDiskMapper.Chunk(mmapChunk.ref)
+		for i, mmapChunk := range ms.mmappedChunks.toSlice() {
+			chk, err := head.chunkDiskMapper.Chunk(mmapChunk.chunk.ref)
 			require.NoError(t, err)
 			require.Equal(t, expHeaders[i], chk.(*chunkenc.HistogramChunk).GetCounterResetHeader())
 		}
@@ -4931,8 +4940,8 @@ func TestGaugeFloatHistogramWALAndChunkHeader(t *testing.T) {
 			chunkenc.UnknownCounterReset,
 			chunkenc.GaugeType,
 		}
-		for i, mmapChunk := range ms.mmappedChunks {
-			chk, err := head.chunkDiskMapper.Chunk(mmapChunk.ref)
+		for i, mmapChunk := range ms.mmappedChunks.toSlice() {
+			chk, err := head.chunkDiskMapper.Chunk(mmapChunk.chunk.ref)
 			require.NoError(t, err)
 			require.Equal(t, expHeaders[i], chk.(*chunkenc.FloatHistogramChunk).GetCounterResetHeader())
 		}

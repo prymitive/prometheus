@@ -164,16 +164,22 @@ func (h *headIndexReader) Series(ref storage.SeriesRef, builder *labels.ScratchB
 
 	*chks = (*chks)[:0]
 
-	for i, c := range s.mmappedChunks {
+	elem := s.mmappedChunks
+	var i int
+	for elem != nil {
 		// Do not expose chunks that are outside of the specified range.
-		if !c.OverlapsClosedInterval(h.mint, h.maxt) {
+		if !elem.chunk.OverlapsClosedInterval(h.mint, h.maxt) {
+			i++
+			elem = elem.prev
 			continue
 		}
 		*chks = append(*chks, chunks.Meta{
-			MinTime: c.minTime,
-			MaxTime: c.maxTime,
+			MinTime: elem.chunk.minTime,
+			MaxTime: elem.chunk.maxTime,
 			Ref:     chunks.ChunkRef(chunks.NewHeadChunkRef(s.ref, s.headChunkID(i))),
 		})
+		i++
+		elem = elem.prev
 	}
 	if s.headChunk != nil {
 		var maxTime int64
@@ -188,7 +194,7 @@ func (h *headIndexReader) Series(ref storage.SeriesRef, builder *labels.ScratchB
 				*chks = append(*chks, chunks.Meta{
 					MinTime: elem.chunk.minTime,
 					MaxTime: maxTime,
-					Ref:     chunks.ChunkRef(chunks.NewHeadChunkRef(s.ref, s.headChunkID(len(s.mmappedChunks)+i))),
+					Ref:     chunks.ChunkRef(chunks.NewHeadChunkRef(s.ref, s.headChunkID(s.mmappedChunks.len()+i))),
 				})
 			}
 		}
@@ -338,17 +344,21 @@ func (s *memSeries) chunk(id chunks.HeadChunkID, chunkDiskMapper *chunks.ChunkDi
 	// }
 	ix := int(id) - int(s.firstChunkID)
 
-	var headChunksLen int
+	var headChunksLen, mmapChunksLen int
 	if s.headChunk != nil {
 		headChunksLen = s.headChunk.len()
 	}
+	if s.mmappedChunks != nil {
+		mmapChunksLen = s.mmappedChunks.len()
+	}
 
-	if ix < 0 || ix > len(s.mmappedChunks)+headChunksLen-1 {
+	if ix < 0 || ix > mmapChunksLen+headChunksLen-1 {
 		return nil, false, storage.ErrNotFound
 	}
 
-	if ix < len(s.mmappedChunks) {
-		chk, err := chunkDiskMapper.Chunk(s.mmappedChunks[ix].ref)
+	if ix < s.mmappedChunks.len() {
+		mix := s.mmappedChunks.atOffset(ix)
+		chk, err := chunkDiskMapper.Chunk(mix.chunk.ref)
 		if err != nil {
 			if _, ok := err.(*chunks.CorruptionErr); ok {
 				panic(err)
@@ -357,12 +367,12 @@ func (s *memSeries) chunk(id chunks.HeadChunkID, chunkDiskMapper *chunks.ChunkDi
 		}
 		mc := memChunkPool.Get().(*memChunk)
 		mc.chunk = chk
-		mc.minTime = s.mmappedChunks[ix].minTime
-		mc.maxTime = s.mmappedChunks[ix].maxTime
+		mc.minTime = mix.chunk.minTime
+		mc.maxTime = mix.chunk.maxTime
 		return mc, true, nil
 	}
 
-	ix -= len(s.mmappedChunks)
+	ix -= mmapChunksLen
 	// headChunk is a linked list where first element is the most recent one and the last one is the oldest.
 	// This order is reversed when compared with mmappedChunks, since mmappedChunks[0] is the oldest chunk,
 	// while headChunk.atOffset(0) would give us the most recent chunk.
@@ -655,14 +665,17 @@ func (s *memSeries) iterator(id chunks.HeadChunkID, c chunkenc.Chunk, isoState *
 		totalSamples := 0    // Total samples in this series.
 		previousSamples := 0 // Samples before this chunk.
 
-		for j, d := range s.mmappedChunks {
-			totalSamples += int(d.numSamples)
+		var j int
+		elem := s.mmappedChunks
+		for elem != nil {
+			totalSamples += int(elem.chunk.numSamples)
 			if j < ix {
-				previousSamples += int(d.numSamples)
+				previousSamples += int(elem.chunk.numSamples)
 			}
+			elem = elem.prev
 		}
 
-		ix -= len(s.mmappedChunks)
+		ix -= s.mmappedChunks.len()
 		if s.headChunk != nil {
 			elems := s.headChunk.toReversedSlice()
 			for j, elem := range elems {

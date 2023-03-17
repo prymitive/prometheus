@@ -1339,7 +1339,7 @@ func (s *memSeries) appendPreprocessor(
 	c = s.head()
 
 	if c == nil {
-		if len(s.mmappedChunks) > 0 && s.mmappedChunks[len(s.mmappedChunks)-1].maxTime >= t {
+		if s.mmappedChunks != nil && s.mmappedChunks.last().chunk.maxTime >= t {
 			// Out of order sample. Sample timestamp is already in the mmapped chunks, so ignore it.
 			return c, false, false
 		}
@@ -1477,7 +1477,7 @@ func (s *memSeries) mmapHeadChunks(chunkDiskMapper *chunks.ChunkDiskMapper) (cou
 	elems := s.headChunk.toReversedSlice()
 	for _, elem := range elems[:len(elems)-1] {
 		chunkRef := chunkDiskMapper.WriteChunk(s.ref, elem.chunk.minTime, elem.chunk.maxTime, elem.chunk.chunk, handleChunkWriteError)
-		s.mmappedChunks = append(s.mmappedChunks, &mmappedChunk{
+		s.mmappedChunks = appendToChunkList(s.mmappedChunks, &mmappedChunk{
 			ref:        chunkRef,
 			numSamples: uint16(elem.chunk.chunk.NumSamples()),
 			minTime:    elem.chunk.minTime,
