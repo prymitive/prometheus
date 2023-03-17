@@ -850,16 +850,16 @@ func (h *Head) loadMmappedChunks(refSeries map[chunks.HeadSeriesRef]*memSeries) 
 			return nil
 		}
 
-		if len(ms.mmappedChunks) > 0 && ms.mmappedChunks[len(ms.mmappedChunks)-1].maxTime >= mint {
+		if lastMmap := ms.mmappedChunks.last(); lastMmap != nil && lastMmap.chunk.maxTime >= mint {
 			h.metrics.mmapChunkCorruptionTotal.Inc()
 			return errors.Errorf("out of sequence m-mapped chunk for series ref %d, last chunk: [%d, %d], new: [%d, %d]",
-				seriesRef, ms.mmappedChunks[len(ms.mmappedChunks)-1].minTime, ms.mmappedChunks[len(ms.mmappedChunks)-1].maxTime,
+				seriesRef, lastMmap.chunk.minTime, lastMmap.chunk.maxTime,
 				mint, maxt)
 		}
 
 		h.metrics.chunks.Inc()
 		h.metrics.chunksCreated.Inc()
-		ms.mmappedChunks = append(ms.mmappedChunks, &mmappedChunk{
+		appendToChunkList(ms.mmappedChunks, &mmappedChunk{
 			ref:        chunkRef,
 			minTime:    mint,
 			maxTime:    maxt,
@@ -1744,8 +1744,8 @@ func (s *stripeSeries) gc(mint int64, minOOOMmapRef chunks.ChunkDiskMapperRef) (
 				series.Lock()
 				rmChunks += series.truncateChunksBefore(mint, minOOOMmapRef)
 
-				if len(series.mmappedChunks) > 0 {
-					seq, _ := series.mmappedChunks[0].ref.Unpack()
+				if series.mmappedChunks != nil {
+					seq, _ := series.mmappedChunks.chunk.ref.Unpack()
 					if seq < minMmapFile {
 						minMmapFile = seq
 					}
@@ -1766,7 +1766,7 @@ func (s *stripeSeries) gc(mint int64, minOOOMmapRef chunks.ChunkDiskMapperRef) (
 						minOOOTime = series.ooo.oooHeadChunk.minTime
 					}
 				}
-				if len(series.mmappedChunks) > 0 || series.headChunk != nil || series.pendingCommit ||
+				if series.mmappedChunks != nil || series.headChunk != nil || series.pendingCommit ||
 					(series.ooo != nil && (len(series.ooo.oooMmappedChunks) > 0 || series.ooo.oooHeadChunk != nil)) {
 					seriesMint := series.minTime()
 					if seriesMint < actualMint {
@@ -1920,7 +1920,7 @@ type memSeries struct {
 	//  after compaction: mmappedChunks=[p7,p8,p9]       firstChunkID=7
 	//
 	// pN is the pointer to the mmappedChunk referered to by HeadChunkID=N
-	mmappedChunks []*mmappedChunk
+	mmappedChunks *memChunkList[*mmappedChunk]
 
 	// Most recent chunks in memory that are still being built or waiting to be mmapped.
 	// This is a linked list, headChunk points to the most recent chunk, headChunk.prev points
@@ -1974,8 +1974,8 @@ func newMemSeries(lset labels.Labels, id chunks.HeadSeriesRef, isolationDisabled
 }
 
 func (s *memSeries) minTime() int64 {
-	if len(s.mmappedChunks) > 0 {
-		return s.mmappedChunks[0].minTime
+	if s.mmappedChunks != nil {
+		return s.mmappedChunks.chunk.minTime
 	}
 	if s.headChunk != nil {
 		return s.headChunk.last().chunk.minTime
@@ -1988,8 +1988,8 @@ func (s *memSeries) maxTime() int64 {
 	if s.headChunk != nil {
 		return s.headChunk.chunk.maxTime
 	}
-	if len(s.mmappedChunks) > 0 {
-		return s.mmappedChunks[len(s.mmappedChunks)-1].maxTime
+	if s.mmappedChunks != nil {
+		return s.mmappedChunks.last().chunk.maxTime
 	}
 	return math.MinInt64
 }
@@ -2004,7 +2004,7 @@ func (s *memSeries) truncateChunksBefore(mint int64, minOOOMmapRef chunks.ChunkD
 		for i, elem := range elems {
 			if elem.chunk.maxTime < mint {
 				// If any head chunk is truncated, we can truncate all mmapped chunks.
-				removedHead = elem.len() + len(s.mmappedChunks)
+				removedHead = elem.len() + s.mmappedChunks.len()
 				s.firstChunkID += chunks.HeadChunkID(removedHead)
 				if i == 0 {
 					// this is the first chunk on the list so we need to clear everything on headChunk
@@ -2020,12 +2020,19 @@ func (s *memSeries) truncateChunksBefore(mint int64, minOOOMmapRef chunks.ChunkD
 	}
 
 	var removedMmap int
-	if len(s.mmappedChunks) > 0 {
+	if s.mmappedChunks != nil {
 		// Iterate chunks from most recent to oldest and truncate on first chunk that's before mint
-		for i := len(s.mmappedChunks) - 1; i >= 0; i-- {
-			if s.mmappedChunks[i].maxTime < mint {
+		elems := s.mmappedChunks.toReversedSlice()
+		for i, elem := range elems {
+			if elem.chunk.maxTime < mint {
 				removedMmap = i + 1
-				s.mmappedChunks = append(s.mmappedChunks[:0], s.mmappedChunks[removedMmap:]...)
+				if removedMmap >= len(elems) {
+					// if we're removing all mmapped chunks then we need to nil it all
+					s.mmappedChunks = nil
+				} else {
+					// else we need to set new root elemet
+					s.mmappedChunks = s.mmappedChunks.atOffset(removedMmap)
+				}
 				s.firstChunkID += chunks.HeadChunkID(removedMmap)
 				break
 			}
@@ -2137,6 +2144,18 @@ func prependToChunkList[T any](mcl *memChunkList[T], chk T) *memChunkList[T] {
 		chunk: chk,
 		prev:  mcl,
 	}
+}
+
+func appendToChunkList[T any](mcl *memChunkList[T], chk T) *memChunkList[T] {
+	if mcl == nil {
+		return &memChunkList[T]{
+			chunk: chk,
+		}
+	}
+	mcl.last().prev = &memChunkList[T]{
+		chunk: chk,
+	}
+	return mcl
 }
 
 type oooHeadChunk struct {

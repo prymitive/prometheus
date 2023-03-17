@@ -472,10 +472,10 @@ Outer:
 func (h *Head) resetSeriesWithMMappedChunks(mSeries *memSeries, mmc, oooMmc []*mmappedChunk, walSeriesRef chunks.HeadSeriesRef) (overlapped bool) {
 	if mSeries.ref != walSeriesRef {
 		// Checking if the new m-mapped chunks overlap with the already existing ones.
-		if len(mSeries.mmappedChunks) > 0 && len(mmc) > 0 {
+		if mSeries.mmappedChunks != nil && len(mmc) > 0 {
 			if overlapsClosedInterval(
-				mSeries.mmappedChunks[0].minTime,
-				mSeries.mmappedChunks[len(mSeries.mmappedChunks)-1].maxTime,
+				mSeries.mmappedChunks.chunk.minTime,
+				mSeries.mmappedChunks.last().chunk.maxTime,
 				mmc[0].minTime,
 				mmc[len(mmc)-1].maxTime,
 			) {
@@ -483,8 +483,8 @@ func (h *Head) resetSeriesWithMMappedChunks(mSeries *memSeries, mmc, oooMmc []*m
 					"msg", "M-mapped chunks overlap on a duplicate series record",
 					"series", mSeries.lset.String(),
 					"oldref", mSeries.ref,
-					"oldmint", mSeries.mmappedChunks[0].minTime,
-					"oldmaxt", mSeries.mmappedChunks[len(mSeries.mmappedChunks)-1].maxTime,
+					"oldmint", mSeries.mmappedChunks.chunk.minTime,
+					"oldmaxt", mSeries.mmappedChunks.last().chunk.maxTime,
 					"newref", walSeriesRef,
 					"newmint", mmc[0].minTime,
 					"newmaxt", mmc[len(mmc)-1].maxTime,
@@ -495,15 +495,17 @@ func (h *Head) resetSeriesWithMMappedChunks(mSeries *memSeries, mmc, oooMmc []*m
 	}
 
 	h.metrics.chunksCreated.Add(float64(len(mmc) + len(oooMmc)))
-	h.metrics.chunksRemoved.Add(float64(len(mSeries.mmappedChunks)))
-	h.metrics.chunks.Add(float64(len(mmc) + len(oooMmc) - len(mSeries.mmappedChunks)))
+	h.metrics.chunksRemoved.Add(float64(mSeries.mmappedChunks.len()))
+	h.metrics.chunks.Add(float64(len(mmc) + len(oooMmc) - mSeries.mmappedChunks.len()))
 
 	if mSeries.ooo != nil {
 		h.metrics.chunksRemoved.Add(float64(len(mSeries.ooo.oooMmappedChunks)))
 		h.metrics.chunks.Sub(float64(len(mSeries.ooo.oooMmappedChunks)))
 	}
 
-	mSeries.mmappedChunks = mmc
+	for _, mc := range mmc {
+		mSeries.mmappedChunks = appendToChunkList(mSeries.mmappedChunks, mc)
+	}
 	if len(oooMmc) == 0 {
 		mSeries.ooo = nil
 	} else {
