@@ -975,22 +975,46 @@ func (c *scrapeCache) iterDone(flushCache bool) {
 		// All caches may grow over time through series churn
 		// or multiple string representations of the same metric. Clean up entries
 		// that haven't appeared in the last scrape.
+		var delCount uint64
 		for s, e := range c.series {
 			if c.iter != e.lastIter {
 				delete(c.series, s)
+				delCount++
 			}
 		}
+		// Go map will allocate as needed to accommodate new elements
+		// but will never shrink. Over long run time this can inflate
+		// maps memory usage.
+		// To avoid this we recreate our maps if we did delete anything
+		// from them.
+		// This might not be needed in the future if https://github.com/golang/go/issues/20135
+		// ever gets addressed.
+		if delCount > 0 {
+			c.series = shrinkMap(c.series)
+		}
+
+		delCount = 0
 		for s, iter := range c.droppedSeries {
 			if c.iter != *iter {
 				delete(c.droppedSeries, s)
+				delCount++
 			}
 		}
+		if delCount > 0 {
+			c.droppedSeries = shrinkMap(c.droppedSeries)
+		}
+
+		delCount = 0
 		c.metaMtx.Lock()
 		for m, e := range c.metadata {
 			// Keep metadata around for 10 scrapes after its metric disappeared.
 			if c.iter-e.lastIter > 10 {
 				delete(c.metadata, m)
+				delCount++
 			}
+		}
+		if delCount > 0 {
+			c.metadata = shrinkMap(c.metadata)
 		}
 		c.metaMtx.Unlock()
 
@@ -1000,10 +1024,9 @@ func (c *scrapeCache) iterDone(flushCache bool) {
 	// Swap current and previous series.
 	c.seriesPrev, c.seriesCur = c.seriesCur, c.seriesPrev
 
-	// We have to delete every single key in the map.
-	for k := range c.seriesCur {
-		delete(c.seriesCur, k)
-	}
+	// Re-allocate the map and set it to have the same needed to fit
+	// all currently scraped time series.
+	c.seriesCur = make(map[uint64]labels.Labels, len(c.seriesPrev))
 }
 
 func (c *scrapeCache) get(met []byte) (*cacheEntry, bool) {
@@ -1934,4 +1957,12 @@ func ContextWithTarget(ctx context.Context, t *Target) context.Context {
 func TargetFromContext(ctx context.Context) (*Target, bool) {
 	t, ok := ctx.Value(ctxKeyTarget).(*Target)
 	return t, ok
+}
+
+func shrinkMap[T comparable, V any](m map[T]V) map[T]V {
+	newMap := make(map[T]V, len(m))
+	for k, v := range m {
+		newMap[k] = v
+	}
+	return newMap
 }
