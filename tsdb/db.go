@@ -1493,7 +1493,9 @@ func (db *DB) compactBlocks() (err error) {
 		default:
 		}
 
+		db.mtx.RLock()
 		uids, err := db.compactor.Compact(db.dir, plan, db.blocks)
+		db.mtx.RUnlock()
 		if err != nil {
 			return fmt.Errorf("compact %s: %w", plan, err)
 		}
@@ -1548,7 +1550,9 @@ func (db *DB) reloadBlocks() (err error) {
 		db.metrics.reloads.Inc()
 	}()
 
+	db.mtx.RLock()
 	loadable, corrupted, err := openBlocks(db.logger, db.dir, db.blocks, db.chunkPool)
+	db.mtx.RUnlock()
 	if err != nil {
 		return err
 	}
@@ -1574,11 +1578,13 @@ func (db *DB) reloadBlocks() (err error) {
 	if len(corrupted) > 0 {
 		// Corrupted but no child loaded for it.
 		// Close all new blocks to release the lock for windows.
+		db.mtx.RLock()
 		for _, block := range loadable {
 			if _, open := getBlock(db.blocks, block.Meta().ULID); !open {
 				block.Close()
 			}
 		}
+		db.mtx.RUnlock()
 		errs := tsdb_errors.NewMulti()
 		for ulid, err := range corrupted {
 			if err != nil {
