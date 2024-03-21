@@ -24,7 +24,7 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/go-kit/log v0.2.1
 	github.com/go-logfmt/logfmt v0.6.0
-	github.com/go-openapi/strfmt v0.22.2
+	github.com/go-openapi/strfmt v0.23.0
 	github.com/go-zookeeper/zk v1.0.3
 	github.com/gogo/protobuf v1.3.2
 	github.com/golang/snappy v0.0.4
@@ -122,7 +122,7 @@ require (
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/analysis v0.22.2 // indirect
-	github.com/go-openapi/errors v0.21.1 // indirect
+	github.com/go-openapi/errors v0.22.0 // indirect
 	github.com/go-openapi/jsonpointer v0.20.2 // indirect
 	github.com/go-openapi/jsonreference v0.20.4 // indirect
 	github.com/go-openapi/loads v0.21.5 // indirect
