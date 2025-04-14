@@ -36,6 +36,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/grafana/regexp"
 	"github.com/prometheus/client_golang/prometheus"
 	prom_testutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -1919,7 +1920,16 @@ func TestScrapeLoopAppend(t *testing.T) {
 func requireEqual(t *testing.T, expected, actual interface{}, msgAndArgs ...interface{}) {
 	t.Helper()
 	testutil.RequireEqualWithOptions(t, expected, actual,
-		[]cmp.Option{cmp.Comparer(equalFloatSamples), cmp.AllowUnexported(histogramSample{})},
+		[]cmp.Option{
+			cmp.Comparer(equalFloatSamples),
+			cmp.AllowUnexported(histogramSample{}),
+			cmpopts.SortSlices(func(a, b floatSample) bool {
+				if a.t != b.t {
+					return a.t < b.t
+				}
+				return labels.Compare(a.metric, b.metric) < 0
+			}),
+		},
 		msgAndArgs...)
 }
 
