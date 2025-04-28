@@ -1813,15 +1813,13 @@ loop:
 			break loop
 		}
 
-		if !seriesCached {
+		if sampleAdded && sampleLimitErr == nil && bucketLimitErr == nil && !seriesCached {
 			ce = sl.cache.addRef(met, ref, lset, hash)
 			if parsedTimestamp == nil || sl.trackTimestampsStaleness {
 				// Bypass staleness logic if there is an explicit timestamp.
 				sl.cache.trackStaleness(hash, ce)
 			}
-			if sampleAdded && sampleLimitErr == nil && bucketLimitErr == nil {
-				seriesAdded++
-			}
+			seriesAdded++
 		}
 
 		// Increment added even if there's an error so we correctly report the

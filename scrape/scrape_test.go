@@ -5603,6 +5603,12 @@ func TestScrapeLoopAppendSampleLimitWithDisappearingSeries(t *testing.T) {
 		},
 	}
 	requireEqual(t, want, resApp.resultFloats, "Appended samples not as expected:\n%s", slApp)
+	// Check we have the correct number of elements in scrape cache
+	require.Len(t, sl.cache.series, 3)
+	require.Len(t, sl.cache.droppedSeries, 0)
+	require.Len(t, sl.cache.seriesCur, 0)
+	require.Len(t, sl.cache.seriesPrev, 3)
+	require.Len(t, sl.cache.metadata, 0)
 
 	now = now.Add(time.Minute)
 	slApp = sl.appender(context.Background())
@@ -5620,6 +5626,12 @@ func TestScrapeLoopAppendSampleLimitWithDisappearingSeries(t *testing.T) {
 	require.Equal(t, 1, createdSeries) // We've added one series before hitting the limit.
 	requireEqual(t, want, resApp.resultFloats, "Appended samples not as expected:\n%s", slApp)
 	sl.cache.iterDone(false)
+	// Check we have the correct number of elements in scrape cache
+	require.Len(t, sl.cache.series, 4)
+	require.Len(t, sl.cache.droppedSeries, 0)
+	require.Len(t, sl.cache.seriesCur, 0)
+	require.Len(t, sl.cache.seriesPrev, 4)
+	require.Len(t, sl.cache.metadata, 0)
 
 	now = now.Add(time.Minute)
 	slApp = sl.appender(context.Background())
@@ -5664,6 +5676,12 @@ func TestScrapeLoopAppendSampleLimitWithDisappearingSeries(t *testing.T) {
 		},
 	}...)
 	requireEqual(t, want, resApp.resultFloats, "Appended samples not as expected:\n%s", slApp)
+	// Check we have the correct number of elements in scrape cache
+	require.Len(t, sl.cache.series, 2)
+	require.Len(t, sl.cache.droppedSeries, 0)
+	require.Len(t, sl.cache.seriesCur, 0)
+	require.Len(t, sl.cache.seriesPrev, 2)
+	require.Len(t, sl.cache.metadata, 0)
 }
 
 // This test covers a case where there's a target with sample_limit set and each scrape sees a completely
